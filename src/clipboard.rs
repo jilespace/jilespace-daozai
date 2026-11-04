@@ -111,6 +111,50 @@ impl History {
             .filter(|item| needle.is_empty() || item.text.to_lowercase().contains(&needle))
             .collect()
     }
+
+    pub fn to_json(&self) -> String {
+        let items: Vec<serde_json::Value> = self
+            .items
+            .iter()
+            .map(|item| {
+                serde_json::json!({
+                    "id": item.id,
+                    "text": item.text,
+                    "copied_at": item.copied_at,
+                    "pinned": item.pinned,
+                })
+            })
+            .collect();
+        serde_json::json!({ "version": 1, "items": items }).to_string()
+    }
+
+    pub fn from_json(raw: &str, limit: usize, days: u32, now: i64) -> Result<Self, String> {
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|error| format!("JSON 解析失败：{error}"))?;
+        if value["version"].as_u64() != Some(1) {
+            return Err("不支持的剪贴板历史版本".into());
+        }
+        let items = value["items"]
+            .as_array()
+            .ok_or_else(|| "剪贴板历史缺少 items".to_string())?;
+        let mut history = Self::new(limit, days);
+        for item in items {
+            let (Some(id), Some(text)) = (item["id"].as_str(), item["text"].as_str()) else {
+                continue;
+            };
+            if text.trim().is_empty() || text.len() > MAX_ITEM_BYTES {
+                continue;
+            }
+            history.items.push(Item {
+                id: id.to_string(),
+                text: text.to_string(),
+                copied_at: item["copied_at"].as_i64().unwrap_or(0),
+                pinned: item["pinned"].as_bool().unwrap_or(false),
+            });
+        }
+        history.cleanup(now);
+        Ok(history)
+    }
 }
 
 pub fn id_for(text: &str) -> String {
@@ -121,6 +165,124 @@ pub fn id_for(text: &str) -> String {
         let _ = write!(id, "{byte:02x}");
     }
     id
+}
+
+pub fn history_path() -> std::path::PathBuf {
+    crate::model::config_dir().join("clipboard.bin")
+}
+
+/// 读取历史；返回历史与需要展示给用户的状态消息。
+pub fn load(limit: usize, days: u32, now: i64) -> (History, Option<String>) {
+    let path = history_path();
+    let Ok(raw) = std::fs::read(&path) else {
+        return (History::new(limit, days), None);
+    };
+    let Some(protected) = raw.strip_prefix(b"DPAPI") else {
+        backup_unreadable(&path);
+        return (
+            History::new(limit, days),
+            Some("剪贴板历史格式无法识别，已备份并重新开始".into()),
+        );
+    };
+    let parsed = unprotect(protected)
+        .and_then(|bytes| String::from_utf8(bytes).map_err(|_| "剪贴板历史不是有效文本".to_string()))
+        .and_then(|text| History::from_json(&text, limit, days, now));
+    match parsed {
+        Ok(history) => (history, None),
+        Err(_) => {
+            backup_unreadable(&path);
+            (
+                History::new(limit, days),
+                Some("剪贴板历史无法解密，已备份并重新开始".into()),
+            )
+        }
+    }
+}
+
+pub fn save(history: &History) -> Result<(), String> {
+    let protected = protect(history.to_json().as_bytes())?;
+    let mut body = b"DPAPI".to_vec();
+    body.extend_from_slice(&protected);
+    crate::model::atomic_write(&history_path(), &body)
+        .map_err(|error| format!("无法保存剪贴板历史：{error}"))
+}
+
+fn backup_unreadable(path: &std::path::Path) {
+    let timestamp = chrono::Local::now().timestamp();
+    let backup = path.with_file_name(format!("clipboard.bin.unreadable-{timestamp}"));
+    let _ = std::fs::rename(path, backup);
+}
+
+#[cfg(windows)]
+pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::{
+        Foundation::{HLOCAL, LocalFree},
+        Security::Cryptography::{
+            CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        },
+    };
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: data.len() as u32,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptProtectData(
+            &input,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+        .map_err(|_| "无法加密剪贴板历史".to_string())?;
+        let bytes =
+            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(HLOCAL(output.pbData.cast()));
+        Ok(bytes)
+    }
+}
+
+#[cfg(windows)]
+pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::{
+        Foundation::{HLOCAL, LocalFree},
+        Security::Cryptography::{
+            CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        },
+    };
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: data.len() as u32,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptUnprotectData(
+            &input,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+        .map_err(|_| "无法解密剪贴板历史".to_string())?;
+        let bytes =
+            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(HLOCAL(output.pbData.cast()));
+        Ok(bytes)
+    }
+}
+
+#[cfg(not(windows))]
+pub fn protect(_data: &[u8]) -> Result<Vec<u8>, String> {
+    Err("剪贴板历史仅支持 Windows".into())
+}
+
+#[cfg(not(windows))]
+pub fn unprotect(_data: &[u8]) -> Result<Vec<u8>, String> {
+    Err("剪贴板历史仅支持 Windows".into())
 }
 
 #[cfg(test)]
@@ -223,5 +385,36 @@ mod tests {
     fn id_is_stable_for_same_text() {
         assert_eq!(id_for("same"), id_for("same"));
         assert_ne!(id_for("same"), id_for("different"));
+    }
+
+    #[test]
+    fn json_round_trip_keeps_order_and_pins() {
+        let mut history = History::new(10, 7);
+        history.insert("first".into(), 100);
+        history.insert("second".into(), 200);
+        let id = id_for("first");
+        history.set_pinned(&id, true);
+
+        let raw = history.to_json();
+        let restored = History::from_json(&raw, 10, 7, 300).unwrap();
+        assert_eq!(restored.items().len(), 2);
+        assert_eq!(restored.items()[0].text, "first");
+        assert!(restored.items()[0].pinned);
+        assert_eq!(restored.items()[1].text, "second");
+    }
+
+    #[test]
+    fn invalid_json_and_unknown_versions_are_rejected() {
+        assert!(History::from_json("{", 200, 7, 0).is_err());
+        assert!(History::from_json(r#"{"version":2,"items":[]}"#, 200, 7, 0).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_round_trip_and_rejects_garbage() {
+        let data = b"hello clipboard";
+        let protected = protect(data).unwrap();
+        assert_eq!(unprotect(&protected).unwrap(), data);
+        assert!(unprotect(b"not-protected").is_err());
     }
 }
