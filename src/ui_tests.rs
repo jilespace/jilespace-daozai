@@ -3461,3 +3461,35 @@ fn mail_report_save_and_failure_paths() {
     h.app.mail_event(crate::mail::Event::Test{account:email,ok:false,note:"模拟网络超时".into()});frame(&mut h,vec![]);
     assert!(h.app.mail.testing.is_none());assert!(h.app.mail.note.contains("模拟网络超时"));
 }
+
+#[test]
+fn clipboard_settings_default_off_and_round_trip() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = H::new();
+
+    assert!(!h.app.settings.clipboard_enabled);
+    assert!(!h.app.settings.clipboard_paused);
+    assert_eq!(h.app.settings.clipboard_limit, 200);
+    assert_eq!(h.app.settings.clipboard_days, 7);
+
+    h.app.settings.clipboard_enabled = true;
+    h.app.settings.clipboard_paused = true;
+    h.app.settings.clipboard_limit = 80;
+    h.app.settings.clipboard_days = 3;
+    h.app.settings.save();
+
+    let loaded = crate::model::Settings::load();
+    assert!(loaded.clipboard_enabled);
+    assert!(loaded.clipboard_paused);
+    assert_eq!(loaded.clipboard_limit, 80);
+    assert_eq!(loaded.clipboard_days, 3);
+
+    std::fs::write(
+        crate::model::config_dir().join("settings.txt"),
+        "clipboard_limit=9999\nclipboard_days=0\n",
+    )
+    .unwrap();
+    let clamped = crate::model::Settings::load();
+    assert_eq!(clamped.clipboard_limit, 500);
+    assert_eq!(clamped.clipboard_days, 1);
+}

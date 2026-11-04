@@ -117,11 +117,15 @@ pub struct Settings {
     /// 用户点开设置或关掉后置 false，不再弹。
     pub calendar_prompt: bool,
     pub calendar_auto_sync: bool,
+    pub clipboard_enabled: bool,
+    pub clipboard_paused: bool,
+    pub clipboard_limit: u32,
+    pub clipboard_days: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true; 8], page_order: [0,1,2,3,4,5,6,7], show_battery: true, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true; 8], page_order: [0,1,2,3,4,5,6,7], show_battery: true, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7 }
     }
 }
 
@@ -171,6 +175,14 @@ impl Settings {
                 "mail_ics" => s.mail_ics = match v.parse::<u32>().unwrap_or(15) { 5 => 5, 30 => 30, _ => 15 },
                 "calendar_prompt" => s.calendar_prompt = v != "0",
                 "calendar_auto_sync" => s.calendar_auto_sync = v != "0",
+                "clipboard_enabled" => s.clipboard_enabled = v == "1",
+                "clipboard_paused" => s.clipboard_paused = v == "1",
+                "clipboard_limit" => {
+                    s.clipboard_limit = v.parse::<u32>().unwrap_or(200).clamp(50, 500)
+                }
+                "clipboard_days" => {
+                    s.clipboard_days = v.parse::<u32>().unwrap_or(7).clamp(1, 30)
+                }
                 _ => {}
             }
         }
@@ -211,6 +223,10 @@ impl Settings {
                 ("ignored_mail_events".into(), serde_json::to_string(&self.ignored_mail_events).unwrap()),
                 ("calendar_prompt".into(), (self.calendar_prompt as u8).to_string()),
                 ("calendar_auto_sync".into(), (self.calendar_auto_sync as u8).to_string()),
+                ("clipboard_enabled".into(), (self.clipboard_enabled as u8).to_string()),
+                ("clipboard_paused".into(), (self.clipboard_paused as u8).to_string()),
+                ("clipboard_limit".into(), self.clipboard_limit.to_string()),
+                ("clipboard_days".into(), self.clipboard_days.to_string()),
             ],
         );
     }
