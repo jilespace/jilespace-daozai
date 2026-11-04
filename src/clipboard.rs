@@ -167,6 +167,178 @@ pub fn id_for(text: &str) -> String {
     id
 }
 
+#[derive(Clone, Debug)]
+pub struct RawClipboard {
+    pub text: String,
+    pub excluded: bool,
+    pub own_process: bool,
+}
+
+pub fn accepts(raw: &RawClipboard) -> bool {
+    !raw.excluded
+        && !raw.own_process
+        && !raw.text.trim().is_empty()
+        && raw.text.len() <= MAX_ITEM_BYTES
+}
+
+#[cfg(windows)]
+pub fn clipboard_sequence() -> u32 {
+    unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() }
+}
+
+#[cfg(windows)]
+pub fn clipboard_owner_is_self() -> bool {
+    use windows::Win32::{
+        System::DataExchange::GetClipboardOwner,
+        System::Threading::GetCurrentProcessId,
+        UI::WindowsAndMessaging::GetWindowThreadProcessId,
+    };
+    unsafe {
+        let Ok(owner) = GetClipboardOwner() else { return false };
+        if owner.0.is_null() {
+            return false;
+        }
+        let mut process = 0u32;
+        let _ = GetWindowThreadProcessId(owner, Some(&mut process));
+        process == GetCurrentProcessId()
+    }
+}
+
+#[cfg(windows)]
+pub fn read_clipboard() -> Option<String> {
+    use windows::Win32::{
+        Foundation::{HGLOBAL, HWND},
+        System::{
+            DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard},
+            Memory::{GlobalLock, GlobalUnlock},
+            Ole::CF_UNICODETEXT,
+        },
+    };
+    unsafe {
+        if OpenClipboard(HWND::default()).is_err() {
+            return None;
+        }
+        let result = (|| {
+            if clipboard_excluded() {
+                return None;
+            }
+            let handle = GetClipboardData(CF_UNICODETEXT.0 as u32).ok()?;
+            let pointer = GlobalLock(HGLOBAL(handle.0)) as *const u16;
+            if pointer.is_null() {
+                return None;
+            }
+            let limit = MAX_ITEM_BYTES / 2;
+            let mut length = 0usize;
+            while length < limit && *pointer.add(length) != 0 {
+                length += 1;
+            }
+            let text = String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length));
+            let _ = GlobalUnlock(HGLOBAL(handle.0));
+            Some(text)
+        })();
+        let _ = CloseClipboard();
+        result
+    }
+}
+
+#[cfg(windows)]
+unsafe fn clipboard_excluded() -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::{
+        Foundation::HGLOBAL,
+        System::{
+            DataExchange::{
+                GetClipboardData, IsClipboardFormatAvailable, RegisterClipboardFormatW,
+            },
+            Memory::{GlobalLock, GlobalUnlock},
+        },
+    };
+    for name in [
+        "ExcludeClipboardContentFromMonitorProcessing",
+        "CanIncludeInClipboardHistory",
+        "CanUploadToCloudClipboard",
+    ] {
+        let format = RegisterClipboardFormatW(&HSTRING::from(name));
+        if format == 0 || IsClipboardFormatAvailable(format).is_err() {
+            continue;
+        }
+        if name == "ExcludeClipboardContentFromMonitorProcessing" {
+            return true;
+        }
+        if let Ok(handle) = GetClipboardData(format) {
+            let pointer = GlobalLock(HGLOBAL(handle.0)) as *const u32;
+            if !pointer.is_null() {
+                let value = *pointer;
+                let _ = GlobalUnlock(HGLOBAL(handle.0));
+                if value == 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+pub fn write_clipboard(text: &str) -> bool {
+    use windows::Win32::{
+        Foundation::{HANDLE, HWND},
+        System::{
+            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Ole::CF_UNICODETEXT,
+        },
+    };
+    unsafe {
+        if OpenClipboard(HWND::default()).is_err() {
+            return false;
+        }
+        let ok = (|| {
+            if EmptyClipboard().is_err() {
+                return false;
+            }
+            let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let Ok(handle) = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2) else {
+                return false;
+            };
+            let pointer = GlobalLock(handle) as *mut u16;
+            if pointer.is_null() {
+                let _ = windows::Win32::Foundation::GlobalFree(handle);
+                return false;
+            }
+            std::ptr::copy_nonoverlapping(units.as_ptr(), pointer, units.len());
+            let _ = GlobalUnlock(handle);
+            if SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(handle.0)).is_err() {
+                let _ = windows::Win32::Foundation::GlobalFree(handle);
+                return false;
+            }
+            true
+        })();
+        let _ = CloseClipboard();
+        ok
+    }
+}
+
+#[cfg(not(windows))]
+pub fn clipboard_sequence() -> u32 {
+    0
+}
+
+#[cfg(not(windows))]
+pub fn clipboard_owner_is_self() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+pub fn read_clipboard() -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn write_clipboard(_text: &str) -> bool {
+    false
+}
+
 pub fn history_path() -> std::path::PathBuf {
     crate::model::config_dir().join("clipboard.bin")
 }
@@ -416,5 +588,19 @@ mod tests {
         let protected = protect(data).unwrap();
         assert_eq!(unprotect(&protected).unwrap(), data);
         assert!(unprotect(b"not-protected").is_err());
+    }
+
+    #[test]
+    fn raw_clipboard_filter_rejects_private_empty_and_oversized() {
+        let normal = RawClipboard { text: "hello".into(), excluded: false, own_process: false };
+        assert!(accepts(&normal));
+        assert!(!accepts(&RawClipboard { text: "hello".into(), excluded: true, own_process: false }));
+        assert!(!accepts(&RawClipboard { text: "hello".into(), excluded: false, own_process: true }));
+        assert!(!accepts(&RawClipboard { text: "   ".into(), excluded: false, own_process: false }));
+        assert!(!accepts(&RawClipboard {
+            text: "x".repeat(MAX_ITEM_BYTES + 1),
+            excluded: false,
+            own_process: false,
+        }));
     }
 }
