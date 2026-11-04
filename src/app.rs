@@ -139,6 +139,8 @@ pub enum Cmd {
     CalendarMonth(chrono::NaiveDate),
     /// 断开并删除日历配置（凭据由界面删除）。
     CalendarForget,
+    /// 清空剪贴板历史。
+    ClipboardClear,
 }
 
 pub struct FrameOut {
@@ -372,6 +374,8 @@ pub struct App {
     pub(crate) subpage:Option<usize>,
     pub(crate) task_dialog:Option<crate::extras::TaskDraft>,
     pub listener_status: String,
+    /// 剪贴板热键冲突或历史读写状态，设置页展示。
+    pub clipboard_status: String,
     pub(crate) notification_bell_until: f64,
     pub(crate) notification_bell_at: f64,
     pub(crate) notice: Option<Alert>,
@@ -487,6 +491,7 @@ impl App {
             music_artwork: None,
             forced_open_until:0.0, settings_open:false, browser_at_top:false, browser_minimal_active:false, settings_focus_requested:false, settings_tab:0, settings_category:0, notification_apps:model::NotificationApps::load(), subpage:None, task_dialog:None,
             listener_status: "尚未连接".into(),
+            clipboard_status: String::new(),
             notification_bell_until: 0.0, notification_bell_at: -10.0, notice: None, hud_notice: None, hud_alpha: 0.0, notice_width:Spring::new(0.0,CLOSE.0,CLOSE.1), notice_details:false, alerts: Default::default(), history: Default::default(), pending: vec![],
             todo_first: 0, pet: Default::default(), last_drink: None,
             toast: None, toast_below: false,

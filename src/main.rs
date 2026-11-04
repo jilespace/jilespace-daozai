@@ -51,6 +51,12 @@ struct Shell {
     quota: daozai::quota::Service,
     quota_sig: Option<(bool,Vec<daozai::quota::Account>)>,
     quota_at: PollClock,
+    clipboard: daozai::clipboard::Service,
+    clipboard_popup: daozai::clipboard_ui::Popup,
+    clipboard_sig: (bool, usize, u32),
+    #[cfg(windows)]
+    clipboard_prev: Option<windows::Win32::Foundation::HWND>,
+    clipboard_status: String,
 }
 
 impl Shell {
@@ -82,6 +88,13 @@ impl Shell {
         let initial_input=daozai::input::State::read();
         #[cfg(windows)] let system_state=daozai::system::Snapshot::read();
         #[cfg(windows)] let system_rx=daozai::system::observe(cc.egui_ctx.clone(),system_state.clone(),initial_input);
+        let clipboard_enabled =
+            app.settings.clipboard_enabled && !app.settings.clipboard_paused;
+        let clipboard_limit = app.settings.clipboard_limit as usize;
+        let clipboard_days = app.settings.clipboard_days;
+        let clipboard = daozai::clipboard::Service::start();
+        clipboard.set_enabled(clipboard_enabled);
+        clipboard.set_limits(clipboard_limit, clipboard_days);
         Self {
             app,
             t0: Instant::now(),
@@ -115,17 +128,24 @@ impl Shell {
             cal: daozai::calendar::Service::start(),
             cal_sig: (Vec::new(), true),
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
+            clipboard,
+            clipboard_popup: daozai::clipboard_ui::Popup::default(),
+            clipboard_sig: (clipboard_enabled, clipboard_limit, clipboard_days),
+            #[cfg(windows)]
+            clipboard_prev: None,
+            clipboard_status: String::new(),
         }
     }
 
     #[cfg(windows)]
-    fn poll_tray(&mut self) {
+    fn poll_tray(&mut self, ctx: &egui::Context) {
         use daozai::tray::{self, Event};
         let events = self.tray.as_ref().map(|t| t.poll()).unwrap_or_default();
         for e in events {
             match e {
                 Event::OpenSettings=>self.app.open_settings(),
                 Event::OpenCalendar=>self.app.open_calendar(None),
+                Event::OpenClipboard=>self.open_clipboard(ctx, false),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -148,6 +168,108 @@ impl Shell {
         }
         if let Some(t) = &self.tray {
             t.sync(tray::State { pet: self.app.settings.pet, minimal: self.app.settings.minimal, autostart: self.autostart });
+        }
+    }
+
+    fn open_clipboard(&mut self, ctx: &egui::Context, restore: bool) {
+        #[cfg(windows)]
+        {
+            let previous = if restore { daozai::native::foreground_window() } else { None };
+            self.clipboard_prev = previous;
+        }
+        #[cfg(not(windows))]
+        let _ = restore;
+        let hotkey_error = self.clipboard_hotkey_error();
+        self.clipboard_popup.open_state(
+            self.app.settings.clipboard_enabled,
+            self.app.settings.clipboard_paused,
+            hotkey_error,
+        );
+        self.clipboard.refresh();
+        ctx.request_repaint();
+    }
+
+    fn close_clipboard(&mut self, restore: bool) {
+        self.clipboard_popup.close();
+        #[cfg(windows)]
+        {
+            if restore {
+                daozai::native::restore_foreground(self.clipboard_prev.take());
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = restore;
+    }
+
+    fn clipboard_hotkey_error(&self) -> Option<String> {
+        #[cfg(windows)]
+        {
+            self.native.as_ref().and_then(|native| native.hotkey_error.clone())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    fn poll_clipboard(&mut self) {
+        let settings = &self.app.settings;
+        let signature = (
+            settings.clipboard_enabled && !settings.clipboard_paused,
+            settings.clipboard_limit as usize,
+            settings.clipboard_days,
+        );
+        if signature != self.clipboard_sig {
+            self.clipboard.set_limits(signature.1, signature.2);
+            self.clipboard.set_enabled(signature.0);
+            self.clipboard_sig = signature;
+        }
+        while let Some(event) = self.clipboard.try_recv() {
+            match event {
+                daozai::clipboard::Event::Changed(items) => {
+                    self.clipboard_popup.set_items((*items).clone());
+                }
+                daozai::clipboard::Event::Copied(_) => {
+                    self.app.say("已复制");
+                }
+                daozai::clipboard::Event::Status(message) => {
+                    self.clipboard_status = message;
+                }
+            }
+        }
+        let hotkey_error = self.clipboard_hotkey_error();
+        self.clipboard_status = hotkey_error.clone().unwrap_or_else(|| self.clipboard_status.clone());
+        self.app.clipboard_status = self.clipboard_status.clone();
+        self.clipboard_popup.sync(
+            self.app.settings.clipboard_enabled,
+            self.app.settings.clipboard_paused,
+            hotkey_error,
+        );
+    }
+
+    fn show_clipboard(&mut self, ctx: &egui::Context) {
+        let dark = self
+            .app
+            .settings
+            .settings_theme
+            .dark(daozai::settings_theme::system_dark(ctx));
+        match self.clipboard_popup.show(ctx, dark) {
+            daozai::clipboard_ui::Action::None => {}
+            daozai::clipboard_ui::Action::Copy(id) => {
+                self.close_clipboard(true);
+                self.clipboard.copy(&id);
+            }
+            daozai::clipboard_ui::Action::Delete(id) => self.clipboard.delete(&id),
+            daozai::clipboard_ui::Action::Pin(id, pinned) => self.clipboard.pin(&id, pinned),
+            daozai::clipboard_ui::Action::Enable => {
+                self.app.settings.clipboard_enabled = true;
+                self.app.settings.save();
+            }
+            daozai::clipboard_ui::Action::Resume => {
+                self.app.settings.clipboard_paused = false;
+                self.app.settings.save();
+            }
+            daozai::clipboard_ui::Action::Close { restore } => self.close_clipboard(restore),
         }
     }
 
@@ -202,7 +324,16 @@ impl eframe::App for Shell {
             self.frame_at=Instant::now();
         }
         #[cfg(windows)]
-        self.poll_tray();
+        self.poll_tray(ctx);
+        #[cfg(windows)]
+        if daozai::native::take_clipboard_hotkey() {
+            if self.clipboard_popup.open {
+                self.close_clipboard(true);
+            } else {
+                self.open_clipboard(ctx, true);
+            }
+        }
+        self.poll_clipboard();
         #[cfg(windows)]
         if daozai::native::take_foreground_change() {
             // 切到别的程序：收起，并在光标离开前不再自动展开
@@ -362,6 +493,7 @@ impl eframe::App for Shell {
                     self.cal_sig=(configs,self.app.settings.calendar_auto_sync);
                 },
                 Cmd::Focus => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
+                Cmd::ClipboardClear => self.clipboard.clear(),
             }
         }
 
@@ -370,8 +502,14 @@ impl eframe::App for Shell {
         #[cfg(not(windows))] let autostart = false;
         self.app.settings_ui(ctx, autostart);
         self.app.mail_reader_ui(ctx);
+        self.show_clipboard(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
+        let repaint_after = if self.clipboard_popup.open {
+            Duration::from_millis(16)
+        } else {
+            repaint_after
+        };
         ctx.request_repaint_after(repaint_after);
     }
 }
