@@ -30,6 +30,9 @@ const WS_EX_NOREDIRECTIONBITMAP: isize = 0x0020_0000;
 static HIT: OnceLock<Mutex<Vec<(i32, i32, i32, i32)>>> = OnceLock::new();
 /// 前台窗口切到别的进程时置位，由主线程消费。
 static FG_CHANGED: AtomicBool = AtomicBool::new(false);
+/// 全局剪贴板历史热键。
+const CLIPBOARD_HOTKEY_ID: i32 = 0xDA0A;
+static CLIPBOARD_HOTKEY: AtomicBool = AtomicBool::new(false);
 
 // `WS_EX_NOREDIRECTIONBITMAP` 只能在 CreateWindowEx 时设置（运行时 SetWindowLongPtrW
 // 会回 ERROR_INVALID_PARAMETER），本项目用 GL 合成窗口，加上这一位后画面上什么都
@@ -80,6 +83,10 @@ unsafe extern "system" fn subclass(
     // 保留框架的焦点通知；lParam=-1 禁止系统在激活时重画透明窗口的顶边。
     if msg==WM_NCACTIVATE {return DefSubclassProc(hwnd,msg,wp,LPARAM(-1));}
     if msg==WM_NCPAINT {return LRESULT(0);}
+    if msg == WM_HOTKEY && wp.0 as i32 == CLIPBOARD_HOTKEY_ID {
+        CLIPBOARD_HOTKEY.store(true, Ordering::Relaxed);
+        return LRESULT(0);
+    }
     if msg == WM_MOUSEACTIVATE
         && GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE.0 as isize != 0
     {
@@ -125,6 +132,81 @@ unsafe extern "system" fn on_foreground(
 /// 主线程每帧调用一次：这一帧是否发生了「前台切到别的程序」。
 pub fn take_foreground_change() -> bool {
     FG_CHANGED.swap(false, Ordering::Relaxed)
+}
+
+pub fn register_clipboard_hotkey(hwnd: HWND) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+    };
+    unsafe {
+        RegisterHotKey(
+            hwnd,
+            CLIPBOARD_HOTKEY_ID,
+            HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_ALT.0 | MOD_NOREPEAT.0),
+            'V' as u32,
+        )
+        .map_err(|_| "全局热键 Ctrl+Alt+V 被其他程序占用".to_string())
+    }
+}
+
+pub fn unregister_clipboard_hotkey(hwnd: HWND) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
+    unsafe {
+        let _ = UnregisterHotKey(hwnd, CLIPBOARD_HOTKEY_ID);
+    }
+}
+
+pub fn take_clipboard_hotkey() -> bool {
+    CLIPBOARD_HOTKEY.swap(false, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn test_clipboard_hotkey_press() {
+    CLIPBOARD_HOTKEY.store(true, Ordering::Relaxed);
+}
+
+pub fn foreground_window() -> Option<HWND> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    (!hwnd.0.is_null()).then_some(hwnd)
+}
+
+pub fn restore_foreground(hwnd: Option<HWND>) {
+    let Some(hwnd) = hwnd else { return };
+    unsafe {
+        if IsWindow(hwnd).as_bool() {
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+/// 光标所在显示器的工作区，换算成逻辑点。
+pub fn cursor_work_area(pixels_per_point: f32) -> Option<(f32, f32, f32, f32)> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    unsafe {
+        let mut cursor = POINT::default();
+        GetCursorPos(&mut cursor).ok()?;
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        if monitor.0.is_null() {
+            return None;
+        }
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return None;
+        }
+        let area = info.rcWork;
+        let scale = pixels_per_point.max(0.1);
+        Some((
+            area.left as f32 / scale,
+            area.top as f32 / scale,
+            (area.right - area.left) as f32 / scale,
+            (area.bottom - area.top) as f32 / scale,
+        ))
+    }
 }
 
 /// winit 会在显示/改属性时重写窗口样式，所以每帧按需兜一次底。
@@ -183,6 +265,7 @@ pub struct Window {
     hook: HWINEVENTHOOK,
     browser_state: (Option<bool>,PollClock),
     drag_capture: DragCapture,
+    pub hotkey_error: Option<String>,
 }
 
 impl Window {
@@ -202,7 +285,8 @@ impl Window {
                 WINEVENT_OUTOFCONTEXT,
             )
         };
-        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default() })
+        let hotkey_error = register_clipboard_hotkey(hwnd).err();
+        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error })
     }
 
     pub fn browser_at_top(&mut self)->Option<bool> {
@@ -259,6 +343,7 @@ impl Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
+        unregister_clipboard_hotkey(self.hwnd);
         unsafe {
             let _ = RemoveWindowSubclass(self.hwnd, Some(subclass), SUBCLASS_ID);
             if !self.hook.is_invalid() {
@@ -316,7 +401,7 @@ mod tests {
             assert!(above(cover.0,island.0),"先复现其他窗口盖住岛体");
             let foreground=GetForegroundWindow();
             let saved=hit().lock().unwrap_or_else(|e|e.into_inner()).clone();
-            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default()};
+            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None};
             let update=|native:&mut Window,expanded|native.update((0.0,0.0,416.0,140.0),(0.0,0.0,416.0,140.0),None,None,1.0,false,expanded);
             update(&mut native,true);
             assert!(above(island.0,cover.0),"展开时必须重新抬高实际窗口层级，不能只检查置顶标记");
@@ -433,5 +518,12 @@ mod tests {
             SetWindowLongPtrW(window.0, GWL_EXSTYLE, style & !(WS_EX_NOACTIVATE.0 as isize));
             assert_eq!(SendMessageW(window.0, WM_MOUSEACTIVATE, WPARAM(0), click).0, MA_ACTIVATE as isize);
         }
+    }
+
+    #[test]
+    fn clipboard_hotkey_flag_is_consumed_once() {
+        test_clipboard_hotkey_press();
+        assert!(take_clipboard_hotkey());
+        assert!(!take_clipboard_hotkey());
     }
 }
