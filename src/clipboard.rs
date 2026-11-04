@@ -4,6 +4,7 @@ pub const MAX_ITEM_BYTES: usize = 32 * 1024;
 pub const MAX_TOTAL_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_LIMIT: usize = 200;
 pub const DEFAULT_DAYS: u32 = 7;
+pub const HOTKEY_TEXT: &str = "Ctrl+Alt+V";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
