@@ -371,6 +371,46 @@ pub fn close(c:&Card,cx:f32,cy:f32,r:f32,color:Color32) {
     c.seg((cx-r,cy+r),(cx+r,cy-r),1.2,color);
 }
 
+/// 搜索：细线圆环 + 手柄。
+pub fn search(c: &Card, cx: f32, cy: f32, r: f32, color: Color32) {
+    let center = c.pos(cx, cy);
+    c.painter.circle_stroke(center, r * c.s, Stroke::new(1.4 * c.s, color));
+    c.seg(
+        (cx + r * 0.7, cy + r * 0.7),
+        (cx + r * 1.35, cy + r * 1.35),
+        1.4,
+        color,
+    );
+}
+
+/// 图钉：圆头 + 针身 + 横杆；filled 表示已置顶。
+pub fn pin(c: &Card, cx: f32, cy: f32, size: f32, filled: bool, color: Color32) {
+    let s = size * c.s;
+    let center = c.pos(cx, cy);
+    if filled {
+        c.painter
+            .circle_filled(center + Vec2::new(0.0, -s * 0.18), s * 0.22, color);
+    } else {
+        c.painter.circle_stroke(
+            center + Vec2::new(0.0, -s * 0.18),
+            s * 0.22,
+            Stroke::new(1.3 * c.s, color),
+        );
+    }
+    c.seg(
+        (cx, cy + s * 0.04),
+        (cx, cy + s * 0.45),
+        1.5,
+        color,
+    );
+    c.seg(
+        (cx - s * 0.18, cy + s * 0.16),
+        (cx + s * 0.18, cy + s * 0.16),
+        1.3,
+        color,
+    );
+}
+
 pub fn chevron(c: &Card, x: f32, y: f32, dir: f32, hover: f32, press: f32) {
     let k = 1.0 - 0.08 * press;
     let c = c.scaled(x, y, k);
