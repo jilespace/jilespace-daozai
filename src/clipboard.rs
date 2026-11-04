@@ -457,6 +457,218 @@ pub fn unprotect(_data: &[u8]) -> Result<Vec<u8>, String> {
     Err("剪贴板历史仅支持 Windows".into())
 }
 
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::{Duration, Instant};
+
+pub enum Cmd {
+    SetEnabled(bool),
+    SetLimits(usize, u32),
+    Copy(String),
+    Delete(String),
+    Pin(String, bool),
+    Clear,
+    Refresh,
+}
+
+#[derive(Clone, Debug)]
+pub enum Event {
+    Changed(std::sync::Arc<Vec<Item>>),
+    Copied(String),
+    Status(String),
+}
+
+pub trait Capture: Send + Sync {
+    fn sequence(&self) -> u32;
+    fn read(&self) -> Option<String>;
+    fn write(&self, text: &str) -> bool;
+    fn own_process(&self) -> bool;
+}
+
+struct SystemCapture;
+
+impl Capture for SystemCapture {
+    fn sequence(&self) -> u32 {
+        clipboard_sequence()
+    }
+
+    fn read(&self) -> Option<String> {
+        read_clipboard()
+    }
+
+    fn write(&self, text: &str) -> bool {
+        write_clipboard(text)
+    }
+
+    fn own_process(&self) -> bool {
+        clipboard_owner_is_self()
+    }
+}
+
+pub struct Service {
+    cmd: Sender<Cmd>,
+    event: Receiver<Event>,
+}
+
+impl Service {
+    pub fn start() -> Self {
+        Self::spawn(std::sync::Arc::new(SystemCapture))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with(capture: std::sync::Arc<dyn Capture>) -> Self {
+        Self::spawn(capture)
+    }
+
+    fn spawn(capture: std::sync::Arc<dyn Capture>) -> Self {
+        let (event_tx, event_rx) = channel();
+        let (cmd_tx, cmd_rx) = channel();
+        let _ = std::thread::Builder::new()
+            .name("daozai-clipboard".into())
+            .spawn(move || supervisor(capture, cmd_rx, event_tx));
+        Self { cmd: cmd_tx, event: event_rx }
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        let _ = self.cmd.send(Cmd::SetEnabled(enabled));
+    }
+
+    pub fn set_limits(&self, limit: usize, days: u32) {
+        let _ = self.cmd.send(Cmd::SetLimits(limit, days));
+    }
+
+    pub fn copy(&self, id: &str) {
+        let _ = self.cmd.send(Cmd::Copy(id.into()));
+    }
+
+    pub fn delete(&self, id: &str) {
+        let _ = self.cmd.send(Cmd::Delete(id.into()));
+    }
+
+    pub fn pin(&self, id: &str, pinned: bool) {
+        let _ = self.cmd.send(Cmd::Pin(id.into(), pinned));
+    }
+
+    pub fn clear(&self) {
+        let _ = self.cmd.send(Cmd::Clear);
+    }
+
+    pub fn refresh(&self) {
+        let _ = self.cmd.send(Cmd::Refresh);
+    }
+
+    pub fn try_recv(&self) -> Option<Event> {
+        self.event.try_recv().ok()
+    }
+}
+
+fn now_seconds() -> i64 {
+    chrono::Local::now().timestamp()
+}
+
+fn supervisor(capture: std::sync::Arc<dyn Capture>, commands: Receiver<Cmd>, events: Sender<Event>) {
+    let (mut history, load_status) = load(DEFAULT_LIMIT, DEFAULT_DAYS, now_seconds());
+    if let Some(status) = load_status {
+        let _ = events.send(Event::Status(status));
+    }
+    let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+    let mut enabled = true;
+    let mut last_sequence = capture.sequence();
+    let mut last_poll = Instant::now();
+    let mut last_prune = Instant::now();
+
+    loop {
+        match commands.recv_timeout(Duration::from_millis(50)) {
+            Ok(Cmd::SetEnabled(next)) => {
+                enabled = next;
+                if enabled {
+                    // 开启时不要把当前剪贴板里的旧内容当成新复制。
+                    last_sequence = capture.sequence();
+                }
+            }
+            Ok(Cmd::SetLimits(limit, days)) => {
+                history.set_limits(limit, days, now_seconds());
+                if let Err(error) = save(&history) {
+                    let _ = events.send(Event::Status(error));
+                }
+                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+            }
+            Ok(Cmd::Copy(id)) => {
+                if let Some(text) = history
+                    .items()
+                    .iter()
+                    .find(|item| item.id == id)
+                    .map(|item| item.text.clone())
+                {
+                    if capture.write(&text) {
+                        last_sequence = capture.sequence();
+                        let _ = events.send(Event::Copied(id));
+                    } else {
+                        let _ = events.send(Event::Status("无法写入剪贴板".into()));
+                    }
+                }
+            }
+            Ok(Cmd::Delete(id)) => {
+                history.remove(&id);
+                if let Err(error) = save(&history) {
+                    let _ = events.send(Event::Status(error));
+                }
+                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+            }
+            Ok(Cmd::Pin(id, pinned)) => {
+                history.set_pinned(&id, pinned);
+                if let Err(error) = save(&history) {
+                    let _ = events.send(Event::Status(error));
+                }
+                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+            }
+            Ok(Cmd::Clear) => {
+                history.clear();
+                if let Err(error) = save(&history) {
+                    let _ = events.send(Event::Status(error));
+                }
+                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+            }
+            Ok(Cmd::Refresh) => {
+                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+
+        if !enabled {
+            continue;
+        }
+        if last_poll.elapsed() >= Duration::from_millis(500) {
+            last_poll = Instant::now();
+            let sequence = capture.sequence();
+            if sequence != last_sequence {
+                last_sequence = sequence;
+                if let Some(text) = capture.read() {
+                    let raw = RawClipboard {
+                        text,
+                        excluded: false,
+                        own_process: capture.own_process(),
+                    };
+                    if accepts(&raw) && history.insert(raw.text, now_seconds()) {
+                        if let Err(error) = save(&history) {
+                            let _ = events.send(Event::Status(error));
+                        }
+                        let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                    }
+                }
+            }
+        }
+        if last_prune.elapsed() >= Duration::from_secs(3600) {
+            last_prune = Instant::now();
+            history.cleanup(now_seconds());
+            if let Err(error) = save(&history) {
+                let _ = events.send(Event::Status(error));
+            }
+            let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,5 +814,177 @@ mod tests {
             excluded: false,
             own_process: false,
         }));
+    }
+
+    use std::sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    };
+    use std::time::{Duration, Instant};
+
+    struct FakeCapture {
+        sequence: AtomicU32,
+        text: Mutex<Option<String>>,
+        written: Mutex<Vec<String>>,
+    }
+
+    impl FakeCapture {
+        fn new() -> Self {
+            Self {
+                sequence: AtomicU32::new(1),
+                text: Mutex::new(None),
+                written: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn set(&self, text: &str) {
+            *self.text.lock().unwrap() = Some(text.into());
+            self.sequence.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl Capture for FakeCapture {
+        fn sequence(&self) -> u32 {
+            self.sequence.load(Ordering::Relaxed)
+        }
+
+        fn read(&self) -> Option<String> {
+            self.text.lock().unwrap().clone()
+        }
+
+        fn write(&self, text: &str) -> bool {
+            self.written.lock().unwrap().push(text.into());
+            self.sequence.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+
+        fn own_process(&self) -> bool {
+            false
+        }
+    }
+
+    fn next_event(service: &Service, timeout: Duration) -> Event {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(event) = service.try_recv() {
+                return event;
+            }
+            if Instant::now() > deadline {
+                panic!("等待剪贴板事件超时");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn test_history_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "daozai-clipboard-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DAOZAI_DATA_DIR", &dir);
+        dir
+    }
+
+    #[test]
+    fn service_emits_initial_snapshot_and_captures_new_text() {
+        let _dir = test_history_dir();
+        let capture = Arc::new(FakeCapture::new());
+        let service = Service::start_with(capture.clone());
+
+        let initial = next_event(&service, Duration::from_secs(1));
+        assert!(matches!(initial, Event::Changed(items) if items.is_empty()));
+
+        capture.set("hello clipboard");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match next_event(&service, Duration::from_millis(700)) {
+                Event::Changed(items)
+                    if items.iter().any(|item| item.text == "hello clipboard") =>
+                {
+                    break
+                }
+                _ if Instant::now() > deadline => panic!("新复制内容没有进入历史"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn copy_command_writes_clipboard_and_does_not_recapture() {
+        let _dir = test_history_dir();
+        let capture = Arc::new(FakeCapture::new());
+        let service = Service::start_with(capture.clone());
+        let _ = next_event(&service, Duration::from_secs(1));
+
+        capture.set("from another app");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let item = loop {
+            if let Event::Changed(items) = next_event(&service, Duration::from_millis(700)) {
+                if let Some(item) = items.first() {
+                    if item.text == "from another app" {
+                        break item.clone();
+                    }
+                }
+            }
+            assert!(Instant::now() < deadline, "待复制内容没有进入历史");
+        };
+
+        service.copy(&item.id);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match next_event(&service, Duration::from_millis(700)) {
+                Event::Copied(id) if id == item.id => break,
+                _ if Instant::now() > deadline => panic!("复制命令没有回执"),
+                _ => {}
+            }
+        }
+        assert_eq!(capture.written.lock().unwrap().as_slice(), ["from another app"]);
+    }
+
+    #[test]
+    fn delete_pin_and_clear_update_the_snapshot() {
+        let _dir = test_history_dir();
+        let capture = Arc::new(FakeCapture::new());
+        let service = Service::start_with(capture.clone());
+        let _ = next_event(&service, Duration::from_secs(1));
+
+        capture.set("keep me");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let item = loop {
+            if let Event::Changed(items) = next_event(&service, Duration::from_millis(700)) {
+                if let Some(item) = items.first().filter(|item| item.text == "keep me") {
+                    break item.clone();
+                }
+            }
+            assert!(Instant::now() < deadline, "待测内容没有进入历史");
+        };
+
+        let wanted = item.id.clone();
+        service.pin(&wanted, true);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Event::Changed(items) = next_event(&service, Duration::from_millis(700)) {
+                if items.first().is_some_and(|entry| entry.id == wanted && entry.pinned) {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "置顶状态没有更新");
+        }
+
+        service.delete(&wanted);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Event::Changed(items) = next_event(&service, Duration::from_millis(700)) {
+                if items.is_empty() {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "删除后历史没有清空");
+        }
     }
 }
