@@ -11,6 +11,7 @@ pub mod app;
 pub mod bt;
 pub mod calendar;
 pub mod clipboard;
+pub mod clipboard_ui;
 mod calendar_ui;
 mod local_calendar;
 mod calendar_editor;
