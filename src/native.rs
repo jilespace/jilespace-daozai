@@ -394,6 +394,29 @@ pub(crate) fn test_notification_hotkey_press() {
     NOTIFICATION_HOTKEY.store(true, Ordering::Relaxed);
 }
 
+/// 向光标下的窗口发送鼠标滚轮（正数向上、负数向下）；滚动截图自动模式使用。
+pub fn scroll_wheel(notches: i32) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+    };
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: (notches * 120) as u32,
+                dwFlags: MOUSEEVENTF_WHEEL,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    unsafe {
+        let _ = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
 /// 让指定标题的窗口不出现在屏幕捕获中（Windows 10 2004+）；失败时返回 false。
 pub fn exclude_from_capture(title: &str) -> bool {
     use windows::core::PCWSTR;

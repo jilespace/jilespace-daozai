@@ -1210,7 +1210,6 @@ mod tests {
         assert_eq!(targets[0].url,"https://example.com/Function_(mathematics)");
         assert_eq!(targets[1].url,"https://example.com/help");
     }
-    use super::*;
     use chrono::TimeZone;
 
     fn raw(subject: &str, body: &str) -> Vec<u8> {

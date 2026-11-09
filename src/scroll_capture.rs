@@ -17,6 +17,8 @@ pub const MAX_PIXELS: u32 = 16_000_000;
 pub const MAX_OVERLAP_BAND: u32 = 64;
 pub const MAX_MATCH_ERROR: f32 = 14.0;
 pub const INTERVAL: Duration = Duration::from_millis(350);
+pub const MAX_AUTO_FRAMES: u32 = 80;
+pub const MAX_AUTO_STALLS: u32 = 8;
 pub const HUD_W: f32 = 320.0;
 pub const HUD_H: f32 = 84.0;
 const HUD_TITLE: &str = "滚动截图 · 岛仔";
@@ -133,6 +135,11 @@ pub fn row_limit_for(width: u32) -> u32 {
     (MAX_PIXELS / width.max(1)).min(MAX_HEIGHT).max(1)
 }
 
+/// 自动滚动模式下是否应该收尾。
+pub fn auto_should_finish(frames: u32, stalls: u32) -> bool {
+    frames >= MAX_AUTO_FRAMES || stalls >= MAX_AUTO_STALLS
+}
+
 #[derive(Clone, Debug)]
 pub enum Event {
     None,
@@ -145,6 +152,7 @@ enum HudAction {
     None,
     Finish,
     Cancel,
+    ToggleAuto,
 }
 
 pub struct Capture {
@@ -155,6 +163,8 @@ pub struct Capture {
     frames: u32,
     last_capture: Instant,
     failures: u32,
+    auto_scroll: bool,
+    stalls: u32,
     viewport: egui::ViewportId,
     position: Option<Pos2>,
     shown: bool,
@@ -194,10 +204,12 @@ impl Capture {
             active: true,
             stitcher: Stitcher::new(first),
             region,
-            status: "滚动页面，自动拼接".into(),
+            status: "自动滚动中，也可手动滚动页面".into(),
             frames: 1,
             last_capture: Instant::now(),
             failures: 0,
+            auto_scroll: true,
+            stalls: 0,
             viewport: egui::ViewportId::from_hash_of("daozai-scroll-capture"),
             position: Some(egui::pos2(x, y)),
             shown: false,
@@ -223,14 +235,18 @@ impl Capture {
                     match self.stitcher.append(&frame) {
                         Append::Added(rows) => {
                             self.failures = 0;
+                            self.stalls = 0;
                             self.status = format!("已拼接 +{rows}px · 共 {}px", self.stitcher.height());
                         }
                         Append::NoChange => {
-                            self.failures = 0;
-                            self.status = "页面未移动，等待滚动…".into();
+                            self.status = if self.auto_scroll { "等待页面响应…".into() } else { "页面未移动，继续滚动页面".into() };
+                            if self.auto_scroll {
+                                self.stalls += 1;
+                            }
                         }
                         Append::NoOverlap => {
                             self.failures += 1;
+                            self.stalls += 1;
                             self.status = "未检测到重叠，请放慢滚动速度".into();
                         }
                         Append::Full => {
@@ -244,13 +260,31 @@ impl Capture {
                     self.status = format!("截取失败：{error}");
                 }
             }
+            self.last_capture = Instant::now();
+            if matches!(event, Event::None) && self.auto_scroll && auto_should_finish(self.frames, self.stalls) {
+                self.status = "已滚动到页面底部，正在完成…".into();
+                event = Event::Finished(self.stitcher.image.clone());
+            }
+            if matches!(event, Event::None) && self.auto_scroll {
+                #[cfg(windows)]
+                crate::native::scroll_wheel(-120);
+            }
         }
         let action = self.show_hud(ctx);
+        if matches!(action, HudAction::ToggleAuto) {
+            self.auto_scroll = !self.auto_scroll;
+            self.stalls = 0;
+            self.status = if self.auto_scroll {
+                "继续自动滚动".into()
+            } else {
+                "已暂停自动滚动，可手动滚动页面".into()
+            };
+        }
         if matches!(event, Event::None) {
             event = match action {
                 HudAction::Finish => Event::Finished(self.stitcher.image.clone()),
                 HudAction::Cancel => Event::Cancelled,
-                HudAction::None => Event::None,
+                HudAction::None | HudAction::ToggleAuto => Event::None,
             };
         }
         if !matches!(event, Event::None) {
@@ -305,6 +339,20 @@ impl Capture {
                             .clicked()
                         {
                             *action = HudAction::Finish;
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(if self.auto_scroll { "暂停" } else { "继续" })
+                                        .size(10.5)
+                                        .color(Color32::from_gray(200)),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("切换自动滚动")
+                            .clicked()
+                        {
+                            *action = HudAction::ToggleAuto;
                         }
                     });
                 });
@@ -434,6 +482,14 @@ mod tests {
     }
 
     #[test]
+    fn auto_scroll_finishes_on_frame_or_stall_limits() {
+        assert!(!auto_should_finish(1, 0));
+        assert!(!auto_should_finish(MAX_AUTO_FRAMES - 1, MAX_AUTO_STALLS - 1));
+        assert!(auto_should_finish(MAX_AUTO_FRAMES, 0));
+        assert!(auto_should_finish(0, MAX_AUTO_STALLS));
+    }
+
+    #[test]
     fn hud_renders_progress_and_actions() {
         let ctx = egui::Context::default();
         crate::theme::load_fonts(&ctx);
@@ -477,7 +533,7 @@ mod tests {
         for clipped in &output.shapes {
             collect(&clipped.shape, &mut texts);
         }
-        for expected in ["滚动截图", "完成", "取消", "滚动页面"] {
+        for expected in ["滚动截图", "完成", "取消", "暂停", "自动滚动"] {
             assert!(texts.iter().any(|text| text.galley.text().contains(expected)), "HUD 缺少 {expected}");
         }
         if let Some(dest) = std::env::var_os("DAOZAI_SCROLL_PREVIEW_DIR").filter(|value| !value.is_empty()) {

@@ -31,7 +31,7 @@
 | 音频可视化 | 可选 WASAPI 回环 + FFT，收起药丸显示 12 段真实频谱 | `audio.rs`、`paint.rs`、`app.rs` |
 | 通知历史 | `Ctrl+Alt+N` 面板：通知镜像、搜索、未读筛选、复制/静音/删除/清空，本机持久化 | `notifications.rs`、`notifications_ui.rs`、`native.rs` |
 | 防睡眠 | 设置与命令面板一键阻止系统休眠/息屏 | `system.rs`、`model.rs` |
-| 滚动截图 | `Ctrl+Alt+Shift+L` 框选后滚动页面，按重叠行拼接成长图（≤8000px） | `scroll_capture.rs`、`region_capture.rs` |
+| 滚动截图 | `Ctrl+Alt+Shift+L` 框选后自动/手动滚动，按重叠行拼接成长图（≤8000px、≤1600 万像素） | `scroll_capture.rs`、`region_capture.rs` |
 | 截图标注 | `Ctrl+Alt+Shift+S` 框选后进入编辑器；六种标注工具、撤销、复制/保存/贴图 | `annotate.rs`、`screenshot.rs`、`capture_ui.rs` |
 | 图片取字 | `Ctrl+Alt+O` 识别剪贴板图片；`Ctrl+Alt+Shift+O` 框选屏幕取字，本地 OCR 并写入历史 | `ocr.rs`、`region_capture.rs`、`capture_ui.rs`、`main.rs` |
 | 系统提示 | 电源/电量、网络、音量、大写锁定、输入语言、蓝牙设备 | `system.rs`、`bt.rs`、`app.rs` |
@@ -163,6 +163,7 @@ Notchy（macOS 13+，闭源，一次性 $24.99，v2.0.6）把 macOS 刘海变成
 22. **Phase V（已完成）通知面板增强**：搜索/未读筛选、按应用静音、多消息保留。
 23. **Phase W（已完成）滚动截图**：固定区域周期采集 + 重叠匹配拼接、HUD 进度与排除捕获。
 24. **Phase X（已完成）内存边界与待机降频**：贴图/滚动截图/邮件正文内存上限、闲置 5 fps。
+25. **Phase Y（已完成）滚动截图自动滚动**：自动发送滚轮、暂停/继续、到底或停滞自动收尾。
 
 ## 五、UI 规范草案（新面板统一遵守）
 
