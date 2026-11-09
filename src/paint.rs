@@ -187,6 +187,24 @@ impl<'a> Card<'a> {
         let v: Vec<Pos2> = pts.iter().map(|&(x, y)| self.pos(x, y)).collect();
         self.painter.add(egui::Shape::convex_polygon(v, color, Stroke::NONE));
     }
+    /// 折线下方的面积填充。曲线不是凸多边形，必须用三角带，否则会被填错。
+    pub fn area(&self, pts: &[(f32, f32)], base: f32, color: Color32) {
+        if pts.len() < 2 {
+            return;
+        }
+        let mut mesh = egui::Mesh::default();
+        for &(x, y) in pts {
+            mesh.colored_vertex(self.pos(x, y), color);
+            mesh.colored_vertex(self.pos(x, base), color);
+        }
+        for index in 0..pts.len() - 1 {
+            let top = (2 * index) as u32;
+            let bottom = top + 1;
+            mesh.add_triangle(top, bottom, top + 2);
+            mesh.add_triangle(bottom, top + 3, top + 2);
+        }
+        self.painter.add(egui::Shape::mesh(mesh));
+    }
     /// 圆弧描边（角度单位弧度，0 = 正右，顺时针为正）。
     pub fn arc(&self, cx: f32, cy: f32, r: f32, a0: f32, a1: f32, width: f32, color: Color32) {
         let n = (((a1 - a0).abs() / TAU) * 96.0).ceil().max(2.0) as usize;

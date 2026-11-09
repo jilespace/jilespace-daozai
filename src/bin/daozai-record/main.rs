@@ -448,6 +448,10 @@ fn main() {
             volume: Some((62, false)),
             bt: Vec::new(),
             bt_ready: true,
+            cpu: Some(28.0),
+            memory: Some((9_760_000_000, 16_000_000_000)),
+            network_rates: Some((1_180_000.0, 86_000.0)),
+            disk: Some((312_000_000_000, 512_000_000_000)),
         };
 
         let mut vp = egui::ViewportInfo::default();
@@ -525,12 +529,12 @@ fn main() {
     eprintln!("{frame_no} 帧 → {out_path}");
 }
 
-/// 将实际渲染的六个页面、休息状态与提醒导出，供回归检查。
+/// 将实际渲染的各页面、休息状态与提醒导出，供回归检查。
 fn gallery() {
     let (root,_)=setup_data();
     let dest=std::env::args().nth(2).unwrap_or_else(||"preview".into());
     std::fs::create_dir_all(&dest).unwrap();
-    for scene in 0..18 {
+    for scene in 0..19 {
         let ctx=egui::Context::default();
         let mut app=App::new(&ctx,Options{fetch_lyrics:false,pet_idle:45.0});
         app.settings.pet=true;
@@ -538,14 +542,18 @@ fn gallery() {
         let mut rgba=vec![];
         for frame in 0..75 {
             let t=frame as f64/60.0;
-            if scene<5 {app.show_page(scene);} if (11..14).contains(&scene){app.open_settings_category(scene-10);}
+            if scene<5 {app.show_page(scene);} if scene==18 {app.show_page(8);app.system_demo();} if (11..14).contains(&scene){app.open_settings_category(scene-10);}
             if scene==9 && frame==0 {app.alert("喝水时间到了","休息一下，喝 250 ml 水吧",2,false);}
             if scene==14 && frame==0 {app.alert("专注计时","该休息了",1,false);}
             if scene==15 && frame==0 {app.alert("系统音量","音量 67%",5,false);}
             if scene==16 {app.settings.minimal=true;}
             if scene==17 && frame==0 {app.receive_notification("聊天应用".into(),"whatsapp.preview".into(),"你好，下午见".into());}
             let idle=if scene==7{60.0}else if scene==8{200.0}else{0.0};
-            let env=Env{t,clock:"10:28:00".into(),today:"2026-10-28".into(),date:"10月28日 周三".into(),battery:Some(76),charging:true,cursor:if scene<6{Some(Pos2::new(320.0,60.0))}else{None},idle_seconds:Some(idle),..Default::default()};
+            let mut env=Env{t,clock:"10:28:00".into(),today:"2026-10-28".into(),date:"10月28日 周三".into(),battery:Some(76),charging:true,cursor:if scene<6{Some(Pos2::new(320.0,60.0))}else{None},idle_seconds:Some(idle),..Default::default()};
+            if scene==18 {
+                env.cpu=Some(31.0);env.memory=Some((9_760_000_000,16_000_000_000));
+                env.network_rates=Some((1_180_000.0,86_000.0));env.disk=Some((312_000_000_000,512_000_000_000));
+            }
             let raw=egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(640.0,190.0))),time:Some(t),viewports:std::iter::once((egui::ViewportId::ROOT,egui::ViewportInfo{native_pixels_per_point:Some(2.0),..Default::default()})).collect(),..Default::default()};
             let output=ctx.run(raw,|ctx|{egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(23,28,45))).show(ctx,|ui|{let win=ui.max_rect();app.frame(ui,win,&env);});});
             ras.update_textures(&output.textures_delta);

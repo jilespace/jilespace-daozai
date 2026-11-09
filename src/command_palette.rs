@@ -1054,6 +1054,7 @@ fn page_english_keywords(page: usize) -> &'static str {
         5 => "mail inbox otp 邮件 验证码",
         6 => "quota ai 额度",
         7 => "calendar schedule 日程 日历",
+        8 => "system cpu memory network disk 系统 性能 内存 网络 磁盘",
         _ => "",
     }
 }

@@ -806,4 +806,189 @@ impl App {
             }
         }
     }
+
+    // ================= 系统状态 =================
+    /// CPU / 内存 / 网络 / 磁盘四块实时读数；曲线每秒补一个点并随时间轻微左移。
+    pub(crate) fn page_system(&mut self, c: &Card, _env: &Env) {
+        let phase = ((self.t - self.system.sample_at).clamp(0.0, 1.0)) as f32;
+        let has = self.system.has_data();
+        let s = &self.system;
+        let faint = Color32::from_gray(118);
+
+        // CPU：左侧大卡片，占比 + 52 秒迷你折线。
+        c.fill(44.0, 32.0, 156.0, 80.0, 10.0, theme::CARD);
+        c.text(56.0, 46.0, "CPU", 9.5, W::Semibold, theme::GRAY, H::Left);
+        let breathe = 0.5 + 0.5 * (self.t * 3.0).sin() as f32;
+        c.circle(85.0, 42.5, 2.0, paint::alpha(theme::BLUE, 0.25 + 0.55 * breathe));
+        c.text(188.0, 46.0, "使用率", 9.0, W::Regular, Color32::from_gray(98), H::Right);
+        let cpu_hit = c.hit(44.0, 32.0, 156.0, 80.0, "system-cpu").on_hover_text(if has {
+            format!(
+                "CPU {} · 最近 48 秒趋势\n点击打开任务管理器",
+                crate::perf::format_percent(s.cpu.pos.clamp(0.0, 100.0))
+            )
+        } else {
+            "正在等待第一次 CPU 采样".into()
+        });
+        if cpu_hit.clicked() {
+            self.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
+        }
+        let percent = if has { s.cpu.pos.clamp(0.0, 100.0) } else { 0.0 };
+        c.text(
+            188.0,
+            71.0,
+            &if has { crate::perf::format_percent(percent) } else { "--".into() },
+            21.0,
+            W::Bold,
+            if has { theme::WHITE } else { Color32::from_gray(90) },
+            H::Right,
+        );
+        sparkline(c, 56.0, 76.0, 132.0, 25.0, &s.history.cpu, 100.0, theme::BLUE, phase, 0.13);
+
+        // 内存：占用比例条。
+        c.fill(208.0, 32.0, 162.0, 32.0, 10.0, theme::CARD);
+        c.text(220.0, 45.0, "内存", 9.5, W::Semibold, theme::GRAY, H::Left);
+        if let Some((used, total)) = s.perf.memory {
+            c.text(
+                358.0,
+                45.0,
+                &format!("{} / {}", crate::perf::format_bytes(used), crate::perf::format_bytes(total)),
+                9.0,
+                W::Regular,
+                Color32::from_gray(142),
+                H::Right,
+            );
+            let fraction = (s.memory.pos / 100.0).clamp(0.0, 1.0);
+            c.fill(220.0, 51.0, 138.0, 5.0, 2.5, Color32::from_gray(40));
+            if fraction > 0.01 {
+                c.fill(220.0, 51.0, (138.0 * fraction).max(5.0), 5.0, 2.5, theme::SOFT_GREEN);
+            }
+        } else {
+            c.text(358.0, 45.0, "读取中…", 9.0, W::Regular, faint, H::Right);
+        }
+        let memory_hit = c.hit(208.0, 32.0, 162.0, 32.0, "system-memory").on_hover_text(match s.perf.memory {
+            Some((used, total)) => format!(
+                "物理内存：已用 {} / 共 {}\n点击打开任务管理器",
+                crate::perf::format_bytes(used),
+                crate::perf::format_bytes(total)
+            ),
+            None => "正在读取内存信息".into(),
+        });
+        if memory_hit.clicked() {
+            self.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
+        }
+
+        // 网络：下行 / 上行两条曲线叠在同一块卡片里。
+        c.fill(208.0, 70.0, 162.0, 42.0, 10.0, theme::CARD);
+        c.text(220.0, 84.0, "网络", 9.5, W::Semibold, theme::GRAY, H::Left);
+        if let Some((down, up)) = s.perf.network {
+            c.text(252.0, 84.0, &format!("↓ {}", crate::perf::format_rate(down)), 9.0, W::Semibold, theme::CYAN, H::Left);
+            c.text(
+                358.0,
+                84.0,
+                &format!("↑ {}", crate::perf::format_rate(up)),
+                9.0,
+                W::Regular,
+                paint::alpha(theme::SOFT_GREEN, 0.85),
+                H::Right,
+            );
+            let down_scale = crate::perf::rate_scale(&s.history.down);
+            let up_scale = crate::perf::rate_scale(&s.history.up);
+            sparkline(c, 220.0, 88.0, 138.0, 19.0, &s.history.down, down_scale, theme::CYAN, phase, 0.12);
+            sparkline(c, 220.0, 88.0, 138.0, 19.0, &s.history.up, up_scale, paint::alpha(theme::SOFT_GREEN, 0.5), phase, 0.0);
+        } else {
+            c.text(358.0, 84.0, "读取中…", 9.0, W::Regular, faint, H::Right);
+        }
+        let network_hit = c.hit(208.0, 70.0, 162.0, 42.0, "system-network").on_hover_text(match s.perf.network {
+            Some((down, up)) => format!(
+                "下行 {} · 上行 {}\n点击打开网络设置",
+                crate::perf::format_rate(down),
+                crate::perf::format_rate(up)
+            ),
+            None => "正在读取网络状态".into(),
+        });
+        if network_hit.clicked() {
+            self.pending.push(Cmd::Open(std::path::PathBuf::from("ms-settings:network-status")));
+        }
+
+        // 磁盘：底部一条细进度条。
+        c.text(44.0, 126.0, "磁盘", 9.5, W::Semibold, theme::GRAY, H::Left);
+        c.fill(74.0, 119.0, 196.0, 5.0, 2.5, Color32::from_gray(38));
+        if let Some((free, total)) = s.perf.disk {
+            let fraction = (s.disk.pos / 100.0).clamp(0.0, 1.0);
+            if fraction > 0.01 {
+                c.fill(74.0, 119.0, (196.0 * fraction).max(5.0), 5.0, 2.5, theme::YELLOW);
+            }
+            c.text(
+                368.0,
+                126.0,
+                &format!("{} 可用 / {}", crate::perf::format_bytes(free), crate::perf::format_bytes(total)),
+                9.0,
+                W::Regular,
+                Color32::from_gray(138),
+                H::Right,
+            );
+        } else {
+            c.text(368.0, 126.0, "首次采样需要约 1 秒", 9.0, W::Regular, faint, H::Right);
+        }
+        let disk_hit = c.hit(44.0, 114.0, 344.0, 16.0, "system-disk").on_hover_text(match s.perf.disk {
+            Some((free, total)) => format!(
+                "系统盘：可用 {} / 共 {}\n点击打开此电脑",
+                crate::perf::format_bytes(free),
+                crate::perf::format_bytes(total)
+            ),
+            None => "正在读取磁盘信息".into(),
+        });
+        if disk_hit.clicked() {
+            self.pending.push(Cmd::Open(std::path::PathBuf::from("shell:MyComputerFolder")));
+        }
+    }
+}
+
+/// 迷你曲线：面积淡填充 + 折线 + 末端光点；`phase` 让曲线随时间轻微左移。
+fn sparkline(
+    c: &Card,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    data: &std::collections::VecDeque<f32>,
+    scale: f32,
+    color: Color32,
+    phase: f32,
+    fill: f32,
+) {
+    let base = y + h;
+    c.fill(x, base, w, 0.7, 0.35, Color32::from_white_alpha(8));
+    if data.len() < 2 {
+        c.fill(x, base - 1.0, w, 1.0, 0.5, paint::alpha(color, 0.16));
+        return;
+    }
+    let step = w / (crate::perf::History::LEN.saturating_sub(1)) as f32;
+    let offset = step * phase.clamp(0.0, 1.0);
+    let last = data.len() - 1;
+    let scale = scale.max(1.0);
+    let points: Vec<(f32, f32)> = data
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let px = x + w - (last - index) as f32 * step - offset;
+            let ratio = (value / scale).clamp(0.0, 1.0);
+            (px, base - ratio * h)
+        })
+        .filter(|(px, _)| *px >= x - 0.5)
+        .collect();
+    if points.len() < 2 {
+        return;
+    }
+    if fill > 0.0 { c.area(&points, base, paint::alpha(color, fill)); }
+    c.path(&points, 1.4, color);
+    if let Some(&(px, py)) = points.last() {
+        c.circle(px, py, 1.6, color);
+        c.glow(px, py, 6.0, paint::alpha(color, 0.16));
+    }
+}
+
+fn system_tool(name: &str) -> std::path::PathBuf {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    std::path::PathBuf::from(root).join("System32").join(name)
 }

@@ -5,7 +5,7 @@
 
 **让重要的信息，轻轻出现在屏幕顶部。**
 
-Windows 桌面伙伴 · 音乐与歌词 · 邮件验证码 · 日程提醒 · AI 额度
+Windows 桌面伙伴 · 音乐与歌词 · 邮件验证码 · 日程提醒 · AI 额度 · 系统状态
 
 [![Release](https://img.shields.io/github/v/release/jilespace/jilespace-daozai?color=6d65ff&label=下载)](https://github.com/jilespace/jilespace-daozai/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4)](#安装与更新)
@@ -34,6 +34,7 @@ Windows 桌面伙伴 · 音乐与歌词 · 邮件验证码 · 日程提醒 · AI
 | AI 额度 | Codex、Claude、Kimi、Grok Bot、Gemini；多账号、常驻圆环、重置时间和自选配色 |
 | 剪贴板历史 | `Ctrl+Alt+V` 唤起，搜索、置顶和删除复制的文本；DPAPI 加密保存 |
 | 命令面板 | `Ctrl+Alt+K` 搜索页面、设置与本机应用；支持算式和单位换算 |
+| 系统状态 | CPU、内存、网络与磁盘实时读数，附 48 秒趋势曲线 |
 | 系统提示 | 电源、电量、网络、音量、大写锁定、输入语言和蓝牙设备状态 |
 
 ### 专注工作，也记得休息和喝水

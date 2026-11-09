@@ -59,6 +59,10 @@ struct Shell {
     clipboard_transfer: Option<(String, bool)>,
     clipboard_status: String,
     command_palette: daozai::command_palette::Panel,
+    /// 系统页采样器与最近一次结果。
+    perf: daozai::perf::Sampler,
+    perf_at: PollClock,
+    perf_value: daozai::perf::Performance,
 }
 
 impl Shell {
@@ -138,6 +142,9 @@ impl Shell {
             clipboard_transfer: None,
             clipboard_status: String::new(),
             command_palette: daozai::command_palette::Panel::default(),
+            perf: daozai::perf::Sampler::new(),
+            perf_at: PollClock::default(),
+            perf_value: Default::default(),
         }
     }
 
@@ -424,6 +431,11 @@ impl Shell {
         let ppp = ctx.pixels_per_point();
         let origin = ctx.input(|i| i.viewport().outer_rect).map(|r| r.min).unwrap_or(Pos2::new(self.win_x, 0.0));
         let cursor = cursor_logical(ppp).map(|(x, y)| Pos2::new(x - origin.x, y - origin.y));
+        // 系统页：按秒采样，CPU 百分比需要两次累计值之差。
+        if self.perf_at.ready(Duration::from_millis(1000)) {
+            self.perf_value = self.perf.sample();
+            self.perf_at = PollClock::now();
+        }
         Env {
             t: self.t0.elapsed().as_secs_f64(),
             clock,
@@ -445,6 +457,10 @@ impl Shell {
             volume: self.system_state.volume,
             bt: self.bt.clone(),
             bt_ready: self.bt_ready,
+            cpu: self.perf_value.cpu,
+            memory: self.perf_value.memory,
+            network_rates: self.perf_value.network,
+            disk: self.perf_value.disk,
         }
     }
 }

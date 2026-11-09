@@ -38,8 +38,8 @@ pub const RAD: f32 = 33.0; // 底部圆角
 pub const WIN_W: f32 = 640.0; // 窗口（透明画布）
 pub const CANVAS_W: f32 = WIN_W + 640.0; // 为右侧通知预留透明画布，原岛仍按 WIN_W 定位。
 pub const WIN_H: f32 = 270.0;
-pub(crate) const PAGE_NAMES: [&str; 8] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程"];
-pub(crate) const PAGE_DESCRIPTIONS: [&str; 8] = [
+pub(crate) const PAGE_NAMES: [&str; 9] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统"];
+pub(crate) const PAGE_DESCRIPTIONS: [&str; 9] = [
     "播放控制与同步歌词",
     "番茄钟与休息计时",
     "饮水记录与提醒",
@@ -48,6 +48,7 @@ pub(crate) const PAGE_DESCRIPTIONS: [&str; 8] = [
     "邮件摘要与验证码",
     "Agent 剩余额度和账号切换",
     "月历、邮件邀请与工作日程",
+    "CPU、内存、网络与磁盘实时状态",
 ];
 
 // ---------- 动效参数 ----------
@@ -104,6 +105,14 @@ pub struct Env {
     pub bt: Vec<crate::bt::Device>,
     /// 蓝牙服务是否已经完成首次扫描。
     pub bt_ready: bool,
+    /// CPU 使用率 0..100；外壳按秒采样。
+    pub cpu: Option<f32>,
+    /// 已用内存 / 总内存（字节）。
+    pub memory: Option<(u64, u64)>,
+    /// 下行 / 上行速率（字节每秒）。
+    pub network_rates: Option<(f64, f64)>,
+    /// 磁盘可用 / 总容量（字节）。
+    pub disk: Option<(u64, u64)>,
 }
 
 impl Env {
@@ -304,6 +313,120 @@ impl CalendarState {
 
 }
 
+pub(crate) struct SystemPageState {
+    pub perf: crate::perf::Performance,
+    pub history: crate::perf::History,
+    /// 展示用缓动量，避免每秒采样时数字与曲线跳动。
+    pub cpu: Spring,
+    pub memory: Spring,
+    pub disk: Spring,
+    pub down: Spring,
+    pub up: Spring,
+    pub sample_at: f64,
+}
+
+impl Default for SystemPageState {
+    fn default() -> Self {
+        Self {
+            perf: Default::default(),
+            history: Default::default(),
+            cpu: Spring::new(0.0, 110.0, 0.9),
+            memory: Spring::new(0.0, 110.0, 0.9),
+            disk: Spring::new(0.0, 110.0, 0.9),
+            down: Spring::new(0.0, 120.0, 0.88),
+            up: Spring::new(0.0, 120.0, 0.88),
+            sample_at: -10.0,
+        }
+    }
+}
+
+impl SystemPageState {
+    pub(crate) fn has_data(&self) -> bool {
+        self.perf.cpu.is_some()
+            || self.perf.memory.is_some()
+            || self.perf.network.is_some()
+            || self.perf.disk.is_some()
+    }
+
+    /// 每秒落一个历史点，并把展示值平滑地追向最新采样。
+    pub(crate) fn update(&mut self, env: &Env, dt: f32) {
+        let next = crate::perf::Performance {
+            cpu: env.cpu,
+            memory: env.memory,
+            network: env.network_rates,
+            disk: env.disk,
+        };
+        if next != self.perf {
+            self.perf = next;
+        }
+        if self.has_data() && env.t - self.sample_at >= 0.9 {
+            self.sample_at = env.t;
+            self.history.push(
+                self.perf.cpu,
+                self.perf.network.map(|(down, _)| down),
+                self.perf.network.map(|(_, up)| up),
+            );
+        }
+        let cpu = self.perf.cpu.unwrap_or(self.cpu.target);
+        let memory = self
+            .perf
+            .memory
+            .map(|(used, total)| if total == 0 { 0.0 } else { used as f32 / total as f32 * 100.0 })
+            .unwrap_or(self.memory.target);
+        let disk = self
+            .perf
+            .disk
+            .map(|(free, total)| if total == 0 { 0.0 } else { (total - free) as f32 / total as f32 * 100.0 })
+            .unwrap_or(self.disk.target);
+        let (down, up) = self
+            .perf
+            .network
+            .map(|(down, up)| (down as f32, up as f32))
+            .unwrap_or((self.down.target, self.up.target));
+        self.cpu.target = cpu.clamp(0.0, 100.0);
+        self.memory.target = memory.clamp(0.0, 100.0);
+        self.disk.target = disk.clamp(0.0, 100.0);
+        self.down.target = down.max(0.0);
+        self.up.target = up.max(0.0);
+        for spring in [&mut self.cpu, &mut self.memory, &mut self.disk, &mut self.down, &mut self.up] {
+            spring.step(dt);
+        }
+    }
+
+    #[cfg(feature = "record")]
+    pub(crate) fn demo(&mut self) {
+        use std::f32::consts::TAU;
+        // 伪随机噪声让演示曲线像真实采样，而不是规则正弦波。
+        let noise = |index: usize, salt: u64| {
+            let mut value = (index as u64).wrapping_mul(6364136223846793005).wrapping_add(salt);
+            value ^= value >> 33;
+            value = value.wrapping_mul(0xff51afd7ed558ccd);
+            value ^= value >> 33;
+            (value % 1000) as f32 / 1000.0
+        };
+        let samples = (0..crate::perf::History::LEN).map(|index| {
+            let phase = index as f32 / crate::perf::History::LEN as f32 * TAU * 2.0;
+            let cpu = (14.0 + phase.sin().abs() * 26.0 + noise(index, 11) * 34.0).clamp(2.0, 96.0);
+            let down = 60_000.0 + noise(index, 23) * 2_400_000.0 + phase.sin().abs() * 700_000.0;
+            let up = 18_000.0 + noise(index, 37) * 260_000.0;
+            (cpu, down, up)
+        });
+        self.history.seed(samples);
+        self.perf = crate::perf::Performance {
+            cpu: Some(31.0),
+            memory: Some((9_760_000_000, 16_000_000_000)),
+            network: Some((1_180_000.0, 86_000.0)),
+            disk: Some((312_000_000_000, 512_000_000_000)),
+        };
+        self.cpu.snap(31.0);
+        self.memory.snap(61.0);
+        self.disk.snap(39.0);
+        self.down.snap(1_180_000.0);
+        self.up.snap(86_000.0);
+        self.sample_at = 0.0;
+    }
+}
+
 pub struct App {
     pub opts: Options,
     pub settings: model::Settings,
@@ -327,7 +450,7 @@ pub struct App {
     page_dir: f32,
     page_t0: f64,
     slide: Spring,
-    dots: [Spring; 8],
+    dots: [Spring; 9],
     wheel_delta: f32,
     wheel_at: f64,
     wheel_page_at: f64,
@@ -430,6 +553,8 @@ pub struct App {
     pub(crate) updates: crate::updates::State,
     pub(crate) resident: bar::Motion,
     pub(crate) resident_power: (Option<u8>,bool),
+    /// 系统页：采样快照、历史曲线与展示缓动。
+    pub(crate) system: SystemPageState,
 }
 
 impl App {
@@ -524,6 +649,7 @@ impl App {
             quota: crate::quota_ui::State::load(),
             updates: Default::default(),
             resident: Default::default(), resident_power:(None,false),
+            system: SystemPageState::default(),
         }
     }
 
@@ -733,6 +859,12 @@ impl App {
         self.pending.push(Cmd::MailSync);
     }
 
+    /// 录制/截图用的系统页样例数据。
+    #[cfg(feature = "record")]
+    pub fn system_demo(&mut self) {
+        self.system.demo();
+    }
+
     /// 录制/截图用的邮件样例（只在 `record` feature 下编译）。
     ///
     /// `DAOZAI_MAIL_DEMO=1|code` 面板带验证码，`=list` 只列邮件，`=fail` 用假授权码走一次
@@ -915,7 +1047,7 @@ impl App {
 
     pub fn show_page(&mut self,page:usize) {
         if !self.settings.visible_pages[page] {
-            self.settings_tab=[1,2,3,5,4,7,11,8][page];
+            self.settings_tab=[1,2,3,5,4,7,11,8,10][page];
             self.open_settings();
             return;
         }
@@ -1410,7 +1542,9 @@ impl App {
         let pet_visible=self.pet_a>0.01 && !self.open && !minimal_pill;
         let ambient=self.pomo.running && (self.open && self.page==1 || !self.open && !minimal_pill && self.notice.is_none() && bar::animations_enabled())
             || self.media.playing && (self.open && self.page==0 || !self.open && !minimal_pill && self.notice.is_none() && self.media.is_music())
-            || self.notice.as_ref().is_some_and(|notice|notice.meeting.is_some());
+            || self.notice.as_ref().is_some_and(|notice|notice.meeting.is_some())
+            // 系统页的曲线与数字持续缓动，打开时保持 30 帧。
+            || self.open && self.page==8 && self.system.has_data();
         let animating=transitioning || ambient || pet_visible && self.pet.state!=PetState::Sleeping;
         // 交互形变保持 60 帧，媒体 30 帧；小表情 20 帧，睡眠 10 帧，静态界面每秒核对提醒。
         let repaint_after=std::time::Duration::from_secs_f64(if transitioning{1.0/60.0}else if ambient{1.0/30.0}else if pet_visible{if self.pet.state==PetState::Sleeping{0.1}else{0.05}}else{1.0});
@@ -1643,7 +1777,7 @@ impl App {
         let (hover,press)=c.hover_t(&settings);
         c.circle(394.0,18.0,13.0,Color32::from_white_alpha((hover*24.0) as u8));
         paint::gear(&c.scaled(394.0,18.0,0.8*(1.0-press*0.08)),394.0,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
-        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8][self.page];self.open_settings();}
+        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10][self.page];self.open_settings();}
         if self.subpage==Some(self.page) {
             c.text(15.0,25.0,"‹",19.0,W::Bold,theme::WHITE,H::Left);
             c.text(37.0,25.0,if self.page==2{"饮水设置"}else{"专注设置"},size::TITLE,W::Bold,theme::WHITE,H::Left);
@@ -1684,6 +1818,7 @@ impl App {
             4 => ("待办", "清单", theme::GREEN),
             5 => ("邮箱", "", theme::CYAN),
             6 => ("AI", "额度", theme::SOFT_GREEN),
+            8 => ("系统", "状态", theme::CYAN),
             _ => ("岛仔", "设置", theme::WHITE),
         };
         let wa = c.text(15.0, base, a, size::TITLE, W::Bold, theme::WHITE, H::Left);
@@ -1740,6 +1875,7 @@ impl App {
             4 => self.page_todo(c, env, cmds),
             5 => self.page_mail(c, env, cmds),
             6 => self.page_quota(c),
+            8 => self.page_system(c, env),
             CALENDAR_PAGE => self.page_calendar(c,env),
             _ => self.page_settings(c),
         }
@@ -1767,6 +1903,7 @@ impl App {
     // 每帧推进：番茄钟、饮水提醒、跨天
     // ---------------------------------------------------------------
     fn tick(&mut self, env: &Env, dt: f32, elapsed: f32) {
+        self.system.update(env, dt);
         if self.toast.as_ref().is_some_and(|(_,at)|self.t-at>2.4){self.toast=None;}
         if env.today != self.today {
             self.today = env.today.clone();
