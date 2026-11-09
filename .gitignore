@@ -13,3 +13,4 @@
 *.key
 .DS_Store
 Thumbs.db
+/preview/

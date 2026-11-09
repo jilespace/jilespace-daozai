@@ -56,6 +56,7 @@ struct Shell {
     clipboard_sig: (bool, usize, u32),
     #[cfg(windows)]
     clipboard_prev: Option<windows::Win32::Foundation::HWND>,
+    clipboard_transfer: Option<(String, bool)>,
     clipboard_status: String,
 }
 
@@ -133,6 +134,7 @@ impl Shell {
             clipboard_sig: (clipboard_enabled, clipboard_limit, clipboard_days),
             #[cfg(windows)]
             clipboard_prev: None,
+            clipboard_transfer: None,
             clipboard_status: String::new(),
         }
     }
@@ -174,11 +176,15 @@ impl Shell {
     fn open_clipboard(&mut self, ctx: &egui::Context, restore: bool) {
         #[cfg(windows)]
         {
-            let previous = if restore { daozai::native::foreground_window() } else { None };
+            let previous = if restore { daozai::native::external_foreground_window() } else { None };
             self.clipboard_prev = previous;
+            self.clipboard_popup.set_target_label(previous.and_then(|hwnd| daozai::native::foreground_window_label(Some(hwnd))));
         }
         #[cfg(not(windows))]
-        let _ = restore;
+        {
+            let _ = restore;
+            self.clipboard_popup.set_target_label(None);
+        }
         let hotkey_error = self.clipboard_hotkey_error();
         self.clipboard_popup.open_state(
             self.app.settings.clipboard_enabled,
@@ -230,9 +236,39 @@ impl Shell {
                     self.clipboard_popup.set_items((*items).clone());
                 }
                 daozai::clipboard::Event::Copied(_) => {
-                    self.app.say("已复制");
+                    if let Some((id, paste)) = self.clipboard_transfer.take() {
+                        if paste {
+                            #[cfg(windows)] {
+                                let target = self.clipboard_prev.take();
+                                self.close_clipboard(false);
+                                if let Err(error) = daozai::native::restore_and_paste(target) {
+                                    self.app.say(format!("已复制，请手动粘贴：{error}"));
+                                }
+                            }
+                            #[cfg(not(windows))]
+                            {
+                                let _ = id;
+                                self.close_clipboard(false);
+                                self.app.say("已复制，请手动粘贴");
+                            }
+                        } else {
+                            let restore = self.clipboard_prev.is_some();
+                            self.close_clipboard(restore);
+                            let _ = id;
+                        }
+                    } else {
+                        self.app.say("已复制");
+                    }
+                }
+                daozai::clipboard::Event::CopyFailed(_, message) => {
+                    self.clipboard_transfer = None;
+                    self.clipboard_popup.set_error(message.clone());
+                    self.app.say(message);
                 }
                 daozai::clipboard::Event::Status(message) => {
+                    if !message.trim().is_empty() {
+                        self.clipboard_popup.set_error(message.clone());
+                    }
                     self.clipboard_status = message;
                 }
             }
@@ -248,18 +284,14 @@ impl Shell {
     }
 
     fn show_clipboard(&mut self, ctx: &egui::Context) {
-        let dark = self
-            .app
-            .settings
-            .settings_theme
-            .dark(daozai::settings_theme::system_dark(ctx));
+        // 快捷面板跟随系统深浅色，和设置页保持同一套观感。
+        let dark = daozai::settings_theme::system_dark(ctx);
         match self.clipboard_popup.show(ctx, dark) {
             daozai::clipboard_ui::Action::None => {}
-            daozai::clipboard_ui::Action::Copy(id) => {
-                self.close_clipboard(true);
-                self.clipboard.copy(&id);
-            }
+            daozai::clipboard_ui::Action::Paste(id) => self.begin_clipboard_transfer(id, true),
+            daozai::clipboard_ui::Action::CopyOnly(id) => self.begin_clipboard_transfer(id, false),
             daozai::clipboard_ui::Action::Delete(id) => self.clipboard.delete(&id),
+            daozai::clipboard_ui::Action::Restore(item) => self.clipboard.restore(item),
             daozai::clipboard_ui::Action::Pin(id, pinned) => self.clipboard.pin(&id, pinned),
             daozai::clipboard_ui::Action::Enable => {
                 self.app.settings.clipboard_enabled = true;
@@ -269,8 +301,32 @@ impl Shell {
                 self.app.settings.clipboard_paused = false;
                 self.app.settings.save();
             }
+            daozai::clipboard_ui::Action::SetPaused(paused) => {
+                self.app.settings.clipboard_paused = paused;
+                self.app.settings.save();
+                self.clipboard_popup.sync(
+                    self.app.settings.clipboard_enabled,
+                    paused,
+                    self.clipboard_hotkey_error(),
+                );
+            }
+            daozai::clipboard_ui::Action::Clear => self.clipboard.clear(),
+            daozai::clipboard_ui::Action::OpenSettings => {
+                self.close_clipboard(false);
+                self.app.open_settings();
+                ctx.request_repaint();
+            }
             daozai::clipboard_ui::Action::Close { restore } => self.close_clipboard(restore),
         }
+    }
+
+    fn begin_clipboard_transfer(&mut self, id: String, paste: bool) {
+        if self.clipboard_transfer.is_some() {
+            return;
+        }
+        self.clipboard_popup.clear_error();
+        self.clipboard_transfer = Some((id.clone(), paste));
+        self.clipboard.copy(&id);
     }
 
     fn env(&mut self, ctx: &egui::Context) -> Env {

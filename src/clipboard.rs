@@ -29,7 +29,11 @@ impl Default for History {
 
 impl History {
     pub fn new(limit: usize, days: u32) -> Self {
-        Self { items: Vec::new(), limit: limit.max(1), days: days.max(1) }
+        Self {
+            items: Vec::new(),
+            limit: limit.max(1),
+            days: days.max(1),
+        }
     }
 
     pub fn items(&self) -> &[Item] {
@@ -49,7 +53,12 @@ impl History {
         let id = id_for(&text);
         let mut item = match self.items.iter().position(|item| item.id == id) {
             Some(position) => self.items.remove(position),
-            None => Item { id, text, copied_at: now, pinned: false },
+            None => Item {
+                id,
+                text,
+                copied_at: now,
+                pinned: false,
+            },
         };
         item.copied_at = now;
         self.items.insert(0, item);
@@ -59,6 +68,18 @@ impl History {
 
     pub fn remove(&mut self, id: &str) {
         self.items.retain(|item| item.id != id);
+    }
+
+    pub fn restore(&mut self, mut item: Item, now: i64) {
+        if item.text.trim().is_empty() || item.text.len() > MAX_ITEM_BYTES {
+            return;
+        }
+        item.id = id_for(&item.text);
+        if !self.items.iter().any(|existing| existing.id == item.id) {
+            self.items.push(item);
+            self.order();
+            self.cleanup(now);
+        }
     }
 
     pub fn set_pinned(&mut self, id: &str, pinned: bool) {
@@ -74,7 +95,8 @@ impl History {
 
     pub fn cleanup(&mut self, now: i64) {
         let cutoff = now - self.days as i64 * 86_400;
-        self.items.retain(|item| item.pinned || item.copied_at >= cutoff);
+        self.items
+            .retain(|item| item.pinned || item.copied_at >= cutoff);
 
         let mut unpinned = 0usize;
         self.items.retain(|item| {
@@ -101,7 +123,9 @@ impl History {
 
     fn order(&mut self) {
         self.items.sort_by(|a, b| {
-            b.pinned.cmp(&a.pinned).then_with(|| b.copied_at.cmp(&a.copied_at))
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| b.copied_at.cmp(&a.copied_at))
         });
     }
 
@@ -190,12 +214,13 @@ pub fn clipboard_sequence() -> u32 {
 #[cfg(windows)]
 pub fn clipboard_owner_is_self() -> bool {
     use windows::Win32::{
-        System::DataExchange::GetClipboardOwner,
-        System::Threading::GetCurrentProcessId,
+        System::DataExchange::GetClipboardOwner, System::Threading::GetCurrentProcessId,
         UI::WindowsAndMessaging::GetWindowThreadProcessId,
     };
     unsafe {
-        let Ok(owner) = GetClipboardOwner() else { return false };
+        let Ok(owner) = GetClipboardOwner() else {
+            return false;
+        };
         if owner.0.is_null() {
             return false;
         }
@@ -358,7 +383,9 @@ pub fn load(limit: usize, days: u32, now: i64) -> (History, Option<String>) {
         );
     };
     let parsed = unprotect(protected)
-        .and_then(|bytes| String::from_utf8(bytes).map_err(|_| "剪贴板历史不是有效文本".to_string()))
+        .and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|_| "剪贴板历史不是有效文本".to_string())
+        })
         .and_then(|text| History::from_json(&text, limit, days, now));
     match parsed {
         Ok(history) => (history, None),
@@ -389,10 +416,8 @@ fn backup_unreadable(path: &std::path::Path) {
 #[cfg(windows)]
 pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
     use windows::Win32::{
-        Foundation::{HLOCAL, LocalFree},
-        Security::Cryptography::{
-            CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
-        },
+        Foundation::{LocalFree, HLOCAL},
+        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
     };
     let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
@@ -410,8 +435,7 @@ pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
             &mut output,
         )
         .map_err(|_| "无法加密剪贴板历史".to_string())?;
-        let bytes =
-            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         let _ = LocalFree(HLOCAL(output.pbData.cast()));
         Ok(bytes)
     }
@@ -420,9 +444,9 @@ pub fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
     use windows::Win32::{
-        Foundation::{HLOCAL, LocalFree},
+        Foundation::{LocalFree, HLOCAL},
         Security::Cryptography::{
-            CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
         },
     };
     let input = CRYPT_INTEGER_BLOB {
@@ -441,8 +465,7 @@ pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
             &mut output,
         )
         .map_err(|_| "无法解密剪贴板历史".to_string())?;
-        let bytes =
-            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         let _ = LocalFree(HLOCAL(output.pbData.cast()));
         Ok(bytes)
     }
@@ -466,6 +489,7 @@ pub enum Cmd {
     SetLimits(usize, u32),
     Copy(String),
     Delete(String),
+    Restore(Item),
     Pin(String, bool),
     Clear,
     Refresh,
@@ -475,6 +499,7 @@ pub enum Cmd {
 pub enum Event {
     Changed(std::sync::Arc<Vec<Item>>),
     Copied(String),
+    CopyFailed(String, String),
     Status(String),
 }
 
@@ -526,7 +551,10 @@ impl Service {
         let _ = std::thread::Builder::new()
             .name("daozai-clipboard".into())
             .spawn(move || supervisor(capture, cmd_rx, event_tx));
-        Self { cmd: cmd_tx, event: event_rx }
+        Self {
+            cmd: cmd_tx,
+            event: event_rx,
+        }
     }
 
     pub fn set_enabled(&self, enabled: bool) {
@@ -543,6 +571,10 @@ impl Service {
 
     pub fn delete(&self, id: &str) {
         let _ = self.cmd.send(Cmd::Delete(id.into()));
+    }
+
+    pub fn restore(&self, item: Item) {
+        let _ = self.cmd.send(Cmd::Restore(item));
     }
 
     pub fn pin(&self, id: &str, pinned: bool) {
@@ -566,13 +598,19 @@ fn now_seconds() -> i64 {
     chrono::Local::now().timestamp()
 }
 
-fn supervisor(capture: std::sync::Arc<dyn Capture>, commands: Receiver<Cmd>, events: Sender<Event>) {
+fn supervisor(
+    capture: std::sync::Arc<dyn Capture>,
+    commands: Receiver<Cmd>,
+    events: Sender<Event>,
+) {
     let (mut history, load_status) = load(DEFAULT_LIMIT, DEFAULT_DAYS, now_seconds());
     if let Some(status) = load_status {
         let _ = events.send(Event::Status(status));
     }
-    let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
-    let mut enabled = true;
+    let _ = events.send(Event::Changed(std::sync::Arc::new(
+        history.items().to_vec(),
+    )));
+    let mut enabled = false;
     let mut last_sequence = capture.sequence();
     let mut last_poll = Instant::now();
     let mut last_prune = Instant::now();
@@ -591,7 +629,9 @@ fn supervisor(capture: std::sync::Arc<dyn Capture>, commands: Receiver<Cmd>, eve
                 if let Err(error) = save(&history) {
                     let _ = events.send(Event::Status(error));
                 }
-                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                let _ = events.send(Event::Changed(std::sync::Arc::new(
+                    history.items().to_vec(),
+                )));
             }
             Ok(Cmd::Copy(id)) => {
                 if let Some(text) = history
@@ -604,33 +644,53 @@ fn supervisor(capture: std::sync::Arc<dyn Capture>, commands: Receiver<Cmd>, eve
                         last_sequence = capture.sequence();
                         let _ = events.send(Event::Copied(id));
                     } else {
-                        let _ = events.send(Event::Status("无法写入剪贴板".into()));
+                        let _ = events.send(Event::CopyFailed(id, "剪贴板正被占用，请重试".into()));
                     }
+                } else {
+                    let _ =
+                        events.send(Event::CopyFailed(id, "这条记录已被移除，请重新选择".into()));
                 }
+            }
+            Ok(Cmd::Restore(item)) => {
+                history.restore(item, now_seconds());
+                if let Err(error) = save(&history) {
+                    let _ = events.send(Event::Status(error));
+                }
+                let _ = events.send(Event::Changed(std::sync::Arc::new(
+                    history.items().to_vec(),
+                )));
             }
             Ok(Cmd::Delete(id)) => {
                 history.remove(&id);
                 if let Err(error) = save(&history) {
                     let _ = events.send(Event::Status(error));
                 }
-                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                let _ = events.send(Event::Changed(std::sync::Arc::new(
+                    history.items().to_vec(),
+                )));
             }
             Ok(Cmd::Pin(id, pinned)) => {
                 history.set_pinned(&id, pinned);
                 if let Err(error) = save(&history) {
                     let _ = events.send(Event::Status(error));
                 }
-                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                let _ = events.send(Event::Changed(std::sync::Arc::new(
+                    history.items().to_vec(),
+                )));
             }
             Ok(Cmd::Clear) => {
                 history.clear();
                 if let Err(error) = save(&history) {
                     let _ = events.send(Event::Status(error));
                 }
-                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                let _ = events.send(Event::Changed(std::sync::Arc::new(
+                    history.items().to_vec(),
+                )));
             }
             Ok(Cmd::Refresh) => {
-                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                let _ = events.send(Event::Changed(std::sync::Arc::new(
+                    history.items().to_vec(),
+                )));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -654,7 +714,9 @@ fn supervisor(capture: std::sync::Arc<dyn Capture>, commands: Receiver<Cmd>, eve
                         if let Err(error) = save(&history) {
                             let _ = events.send(Event::Status(error));
                         }
-                        let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+                        let _ = events.send(Event::Changed(std::sync::Arc::new(
+                            history.items().to_vec(),
+                        )));
                     }
                 }
             }
@@ -665,7 +727,9 @@ fn supervisor(capture: std::sync::Arc<dyn Capture>, commands: Receiver<Cmd>, eve
             if let Err(error) = save(&history) {
                 let _ = events.send(Event::Status(error));
             }
-            let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
+            let _ = events.send(Event::Changed(std::sync::Arc::new(
+                history.items().to_vec(),
+            )));
         }
     }
 }
@@ -685,6 +749,18 @@ mod tests {
         assert!(history.insert("second".into(), 2));
         assert_eq!(history.items()[0].text, "second");
         assert_eq!(history.items()[1].text, "first");
+    }
+
+    #[test]
+    fn restoring_deleted_item_preserves_text_timestamp_and_pin() {
+        let mut history = History::new(10, 7);
+        history.insert("keep original".into(), 1000);
+        let id = id_for("keep original");
+        history.set_pinned(&id, true);
+        let deleted = history.items()[0].clone();
+        history.remove(&id);
+        history.restore(deleted.clone(), 2000);
+        assert_eq!(history.items(), &[deleted]);
     }
 
     #[test]
@@ -805,11 +881,27 @@ mod tests {
 
     #[test]
     fn raw_clipboard_filter_rejects_private_empty_and_oversized() {
-        let normal = RawClipboard { text: "hello".into(), excluded: false, own_process: false };
+        let normal = RawClipboard {
+            text: "hello".into(),
+            excluded: false,
+            own_process: false,
+        };
         assert!(accepts(&normal));
-        assert!(!accepts(&RawClipboard { text: "hello".into(), excluded: true, own_process: false }));
-        assert!(!accepts(&RawClipboard { text: "hello".into(), excluded: false, own_process: true }));
-        assert!(!accepts(&RawClipboard { text: "   ".into(), excluded: false, own_process: false }));
+        assert!(!accepts(&RawClipboard {
+            text: "hello".into(),
+            excluded: true,
+            own_process: false
+        }));
+        assert!(!accepts(&RawClipboard {
+            text: "hello".into(),
+            excluded: false,
+            own_process: true
+        }));
+        assert!(!accepts(&RawClipboard {
+            text: "   ".into(),
+            excluded: false,
+            own_process: false
+        }));
         assert!(!accepts(&RawClipboard {
             text: "x".repeat(MAX_ITEM_BYTES + 1),
             excluded: false,
@@ -896,6 +988,7 @@ mod tests {
         let _dir = test_history_dir();
         let capture = Arc::new(FakeCapture::new());
         let service = Service::start_with(capture.clone());
+        service.set_enabled(true);
 
         let initial = next_event(&service, Duration::from_secs(1));
         assert!(matches!(initial, Event::Changed(items) if items.is_empty()));
@@ -920,6 +1013,7 @@ mod tests {
         let _dir = test_history_dir();
         let capture = Arc::new(FakeCapture::new());
         let service = Service::start_with(capture.clone());
+        service.set_enabled(true);
         let _ = next_event(&service, Duration::from_secs(1));
 
         capture.set("from another app");
@@ -944,7 +1038,10 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(capture.written.lock().unwrap().as_slice(), ["from another app"]);
+        assert_eq!(
+            capture.written.lock().unwrap().as_slice(),
+            ["from another app"]
+        );
     }
 
     #[test]
@@ -952,6 +1049,7 @@ mod tests {
         let _dir = test_history_dir();
         let capture = Arc::new(FakeCapture::new());
         let service = Service::start_with(capture.clone());
+        service.set_enabled(true);
         let _ = next_event(&service, Duration::from_secs(1));
 
         capture.set("keep me");
@@ -970,7 +1068,10 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             if let Event::Changed(items) = next_event(&service, Duration::from_millis(700)) {
-                if items.first().is_some_and(|entry| entry.id == wanted && entry.pinned) {
+                if items
+                    .first()
+                    .is_some_and(|entry| entry.id == wanted && entry.pinned)
+                {
                     break;
                 }
             }

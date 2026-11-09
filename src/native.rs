@@ -10,6 +10,7 @@
 //! - 原版没有可用的 Esc 收起入口（§2.5），这里也不注册键盘钩子。
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -170,6 +171,39 @@ pub fn foreground_window() -> Option<HWND> {
     (!hwnd.0.is_null()).then_some(hwnd)
 }
 
+fn window_process_id(hwnd: HWND) -> Option<u32> {
+    if hwnd.0.is_null() { return None; }
+    unsafe {
+        let mut pid = 0u32;
+        let thread = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        (thread != 0 && pid != 0).then_some(pid)
+    }
+}
+
+fn is_external_window(hwnd: HWND) -> bool {
+    let current_pid = unsafe { GetCurrentProcessId() };
+    (unsafe { IsWindow(hwnd).as_bool() })
+        && window_process_id(hwnd).is_some_and(|pid| pid != current_pid)
+}
+
+pub fn external_foreground_window() -> Option<HWND> {
+    foreground_window().filter(|&hwnd| is_external_window(hwnd))
+}
+
+pub fn foreground_window_label(hwnd: Option<HWND>) -> Option<String> {
+    let hwnd = hwnd.filter(|&hwnd| is_external_window(hwnd))?;
+    unsafe {
+        let mut path = [0u16; 1024];
+        let length = GetWindowModuleFileNameW(hwnd, &mut path);
+        if length == 0 { return None; }
+        let executable = String::from_utf16_lossy(&path[..length as usize]);
+        let stem = Path::new(&executable).file_stem()?.to_str()?.trim();
+        if stem.is_empty() { return None; }
+        let label: String = stem.chars().filter(|character| !character.is_control()).take(64).collect();
+        (!label.is_empty()).then_some(label)
+    }
+}
+
 pub fn restore_foreground(hwnd: Option<HWND>) {
     let Some(hwnd) = hwnd else { return };
     unsafe {
@@ -177,6 +211,95 @@ pub fn restore_foreground(hwnd: Option<HWND>) {
             let _ = SetForegroundWindow(hwnd);
         }
     }
+}
+
+fn popup_position_in_work_area(cursor_px:(i32,i32),work_area_px:(i32,i32,i32,i32),width:f32,height:f32,pixels_per_point:f32)->Option<(f32,f32)> {
+    if !width.is_finite() || !height.is_finite() || !pixels_per_point.is_finite()
+        || width<=0.0 || height<=0.0 || pixels_per_point<=0.0 { return None; }
+    let (left_px,top_px,right_px,bottom_px)=work_area_px;
+    if right_px<=left_px || bottom_px<=top_px { return None; }
+    let scale=pixels_per_point;
+    let left=left_px as f32/scale;let top=top_px as f32/scale;
+    let right=right_px as f32/scale;let bottom=bottom_px as f32/scale;
+    let desired_x=cursor_px.0 as f32/scale+12.0;
+    let desired_y=cursor_px.1 as f32/scale+12.0;
+    Some((desired_x.clamp(left,(right-width).max(left)),desired_y.clamp(top,(bottom-height).max(top))))
+}
+
+pub fn clipboard_popup_position(width:f32,height:f32,pixels_per_point:f32)->Option<(f32,f32)> {
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW,MonitorFromPoint,MONITORINFO,MONITOR_DEFAULTTONEAREST};
+    unsafe {
+        let mut cursor=POINT::default();GetCursorPos(&mut cursor).ok()?;
+        let monitor=MonitorFromPoint(cursor,MONITOR_DEFAULTTONEAREST);
+        if monitor.0.is_null(){return None;}
+        let mut info=MONITORINFO{cbSize:std::mem::size_of::<MONITORINFO>() as u32,..Default::default()};
+        if !GetMonitorInfoW(monitor,&mut info).as_bool(){return None;}
+        let area=info.rcWork;
+        popup_position_in_work_area((cursor.x,cursor.y),(area.left,area.top,area.right,area.bottom),width,height,pixels_per_point)
+    }
+}
+
+const PASTE_WAIT:Duration=Duration::from_millis(300);
+const PASTE_POLL:Duration=Duration::from_millis(5);
+
+fn modifier_keys_are_down()->bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LCONTROL,VK_LMENU,VK_LSHIFT,VK_RCONTROL,VK_RMENU,VK_RSHIFT};
+    [VK_LCONTROL,VK_RCONTROL,VK_LMENU,VK_RMENU,VK_LSHIFT,VK_RSHIFT].into_iter()
+        .any(|key|unsafe{GetAsyncKeyState(key.0 as i32)<0})
+}
+
+fn wait_for_modifiers_released(deadline:std::time::Instant)->bool {
+    while modifier_keys_are_down() {
+        if std::time::Instant::now()>=deadline{return false;}
+        std::thread::sleep(PASTE_POLL);
+    }
+    true
+}
+
+fn paste_release_keys(inserted:u32)->Vec<windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LCONTROL,VK_V};
+    match inserted {1=>vec![VK_LCONTROL],2=>vec![VK_V,VK_LCONTROL],3=>vec![VK_LCONTROL],_=>Vec::new()}
+}
+
+unsafe fn release_paste_keys(keys:&[windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY]) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP};
+    let inputs:Vec<INPUT>=keys.iter().map(|&key|INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key,dwFlags:KEYEVENTF_KEYUP,..Default::default()}}}).collect();
+    if !inputs.is_empty(){let _=SendInput(&inputs,std::mem::size_of::<INPUT>() as i32);}
+}
+
+fn target_is_current_external_window(hwnd:HWND,expected_pid:u32)->bool {
+    unsafe {IsWindow(hwnd).as_bool() && GetForegroundWindow()==hwnd && window_process_id(hwnd)==Some(expected_pid) && expected_pid!=GetCurrentProcessId()}
+}
+
+pub fn restore_and_paste(hwnd:Option<HWND>)->Result<(),String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput,INPUT,INPUT_0,INPUT_KEYBOARD,KEYBDINPUT,KEYEVENTF_KEYUP,VK_LCONTROL,VK_V};
+    let hwnd=hwnd.ok_or_else(||"没有可恢复的外部窗口".to_string())?;
+    let pid=window_process_id(hwnd).ok_or_else(||"剪贴板目标窗口无效".to_string())?;
+    if !is_external_window(hwnd){return Err("剪贴板目标必须属于外部进程".to_string());}
+    let deadline=std::time::Instant::now()+PASTE_WAIT;
+    unsafe {
+        if IsIconic(hwnd).as_bool(){let _=ShowWindowAsync(hwnd,SW_RESTORE);}
+        if !SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow()!=hwnd{return Err("无法恢复剪贴板目标窗口".to_string());}
+    }
+    while !target_is_current_external_window(hwnd,pid) {
+        if std::time::Instant::now()>=deadline{return Err("剪贴板目标窗口未在超时内成为前台".to_string());}
+        std::thread::sleep(PASTE_POLL);
+    }
+    if !wait_for_modifiers_released(deadline){return Err("等待物理 Ctrl/Alt/Shift 释放超时".to_string());}
+    if !target_is_current_external_window(hwnd,pid){return Err("剪贴板目标窗口已失去前台".to_string());}
+    let inputs=[
+        INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:VK_LCONTROL,..Default::default()}}},
+        INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:VK_V,..Default::default()}}},
+        INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:VK_V,dwFlags:KEYEVENTF_KEYUP,..Default::default()}}},
+        INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:VK_LCONTROL,dwFlags:KEYEVENTF_KEYUP,..Default::default()}}},
+    ];
+    let sent=unsafe{SendInput(&inputs,std::mem::size_of::<INPUT>() as i32)};
+    if sent!=inputs.len() as u32 {
+        let inserted=paste_release_keys(sent.min(inputs.len() as u32));
+        unsafe{release_paste_keys(&inserted);}
+        return Err(format!("Ctrl+V 输入仅派发 {sent}/{} 个事件",inputs.len()));
+    }
+    Ok(())
 }
 
 /// 光标所在显示器的工作区，换算成逻辑点。
@@ -356,6 +479,56 @@ impl Drop for Window {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_popup_geometry_follows_cursor_and_clamps_to_work_area() {
+        assert_eq!(popup_position_in_work_area((100,200),(0,0,1920,1040),420.0,500.0,1.0),Some((112.0,212.0)));
+        assert_eq!(popup_position_in_work_area((1900,1020),(0,0,1920,1040),420.0,500.0,1.0),Some((1500.0,540.0)));
+        assert_eq!(popup_position_in_work_area((-1900,-1000),(-1920,-1080,0,0),420.0,500.0,2.0),Some((-938.0,-500.0)));
+        assert_eq!(popup_position_in_work_area((-10,-10),(-1920,-1080,0,0),420.0,500.0,2.0),Some((-420.0,-500.0)));
+        assert_eq!(popup_position_in_work_area((100,100),(0,40,300,240),420.0,500.0,1.0),Some((0.0,40.0)));
+    }
+
+    #[test]
+    fn clipboard_popup_geometry_rejects_invalid_dimensions_and_scale() {
+        for invalid in [0.0,-1.0,f32::NAN,f32::INFINITY] {
+            assert!(popup_position_in_work_area((0,0),(0,0,1920,1040),invalid,500.0,1.0).is_none());
+            assert!(popup_position_in_work_area((0,0),(0,0,1920,1040),420.0,invalid,1.0).is_none());
+            assert!(popup_position_in_work_area((0,0),(0,0,1920,1040),420.0,500.0,invalid).is_none());
+        }
+        assert!(popup_position_in_work_area((0,0),(100,0,0,1040),420.0,500.0,1.0).is_none());
+        assert!(popup_position_in_work_area((0,0),(0,40,1920,40),420.0,500.0,1.0).is_none());
+    }
+
+    #[test]
+    fn clipboard_paste_rejects_missing_and_invalid_windows_without_input() {
+        for target in [None,Some(HWND::default()),Some(HWND((-1isize) as *mut _))] {
+            assert!(restore_and_paste(target).is_err());
+            assert!(foreground_window_label(target).is_none());
+        }
+    }
+
+    #[test]
+    fn clipboard_paste_rejects_our_own_window_without_input() {
+        unsafe {
+            let hwnd=CreateWindowExW(WS_EX_NOACTIVATE,windows::core::w!("STATIC"),windows::core::w!("private document title"),WS_POPUP,0,0,1,1,None,None,None,None).unwrap();
+            let result=restore_and_paste(Some(hwnd));
+            let label=foreground_window_label(Some(hwnd));
+            let _=DestroyWindow(hwnd);
+            assert!(result.is_err());
+            assert!(label.is_none());
+        }
+    }
+
+    #[test]
+    fn clipboard_partial_input_recovery_releases_only_inserted_keydowns() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LCONTROL,VK_V};
+        assert_eq!(paste_release_keys(0),Vec::new());
+        assert_eq!(paste_release_keys(1),vec![VK_LCONTROL]);
+        assert_eq!(paste_release_keys(2),vec![VK_V,VK_LCONTROL]);
+        assert_eq!(paste_release_keys(3),vec![VK_LCONTROL]);
+        assert_eq!(paste_release_keys(4),Vec::new());
+    }
 
     #[test]
     fn drag_capture_ignores_clicks_and_pointer_jitter() {
