@@ -146,6 +146,20 @@ fn dnd_windows_wrap_midnight_and_clipboard_clean_setting_persists() {
 }
 
 #[test]
+fn muting_an_app_suppresses_future_notifications() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings.notifications=true;
+    h.app.receive_notification("微信".into(),"wechat.exe".into(),"第一条消息".into());
+    assert_eq!(h.app.notifications_snapshot().len(),1);
+    assert!(h.app.mute_notification_app("wechat.exe","微信"));
+    assert!(!h.app.mute_notification_app("wechat.exe","微信"),"重复静音应提示已在列表");
+    h.app.receive_notification("微信".into(),"wechat.exe".into(),"第二条消息".into());
+    assert_eq!(h.app.notifications_snapshot().len(),1,"静音后不应再记录该应用");
+    assert!(h.app.notification_apps.items.iter().any(|(id,_,enabled)|id=="wechat.exe" && !enabled));
+}
+
+#[test]
 fn system_notifications_are_stored_and_mirrored_to_the_island() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();

@@ -21,6 +21,8 @@ pub enum Action {
     Close,
     Copy(String),
     Delete(String),
+    /// 不再提醒该应用。
+    MuteApp(String, String),
     Clear,
 }
 
@@ -29,6 +31,9 @@ pub struct Popup {
     items: Vec<Notification>,
     unread: usize,
     status: String,
+    query: String,
+    unread_only: bool,
+    focus_search: bool,
     position: Option<egui::Pos2>,
     fade: f32,
     shown: bool,
@@ -44,6 +49,9 @@ impl Default for Popup {
             items: Vec::new(),
             unread: 0,
             status: String::new(),
+            query: String::new(),
+            unread_only: false,
+            focus_search: false,
             position: None,
             fade: 0.0,
             shown: false,
@@ -69,6 +77,9 @@ impl Popup {
         self.shown_at = None;
         self.had_focus = false;
         self.clear_confirm = false;
+        self.query.clear();
+        self.unread_only = false;
+        self.focus_search = true;
     }
 
     pub fn close(&mut self) {
@@ -183,6 +194,8 @@ impl Popup {
                             .color(palette.faint),
                         );
                         ui.add_space(4.0);
+                        self.search_row(ui, &palette);
+                        ui.add_space(4.0);
                         ui.separator();
                         ui.add_space(2.0);
                         self.list(ui, &palette, &now, &mut action);
@@ -248,6 +261,44 @@ impl Popup {
         });
     }
 
+    fn search_row(&mut self, ui: &mut egui::Ui, palette: &panel::Palette) {
+        ui.horizontal(|ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .hint_text("搜索应用或通知内容")
+                    .desired_width(ui.available_width() - 128.0)
+                    .font(egui::FontId::proportional(11.5)),
+            );
+            if self.focus_search {
+                response.request_focus();
+                self.focus_search = false;
+            }
+            if !self.query.is_empty() {
+                if ui
+                    .add(egui::Button::new(RichText::new("×").size(11.0).color(palette.faint)).frame(false))
+                    .on_hover_text("清空搜索")
+                    .clicked()
+                {
+                    self.query.clear();
+                }
+            }
+            for (unread_only, label, width) in [(false, "全部", 42.0f32), (true, "未读", 42.0f32)] {
+                let selected = self.unread_only == unread_only;
+                let button = egui::Button::new(
+                    RichText::new(label)
+                        .size(10.0)
+                        .color(if selected { palette.text } else { palette.faint }),
+                )
+                .fill(if selected { palette.raised } else { Color32::TRANSPARENT })
+                .stroke(if selected { Stroke::new(1.0_f32, palette.line) } else { Stroke::NONE })
+                .corner_radius(6.0);
+                if ui.add_sized([width, 22.0], button).clicked() {
+                    self.unread_only = unread_only;
+                }
+            }
+        });
+    }
+
     fn list(&mut self, ui: &mut egui::Ui, palette: &panel::Palette, now: &chrono::DateTime<chrono::Local>, action: &mut Action) {
         if self.items.is_empty() {
             ui.add_space(70.0);
@@ -262,6 +313,28 @@ impl Popup {
             });
             return;
         }
+        let needle = self.query.trim().to_lowercase();
+        let unread = self.unread;
+        let filtered: Vec<(usize, &Notification)> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(index, item)| {
+                (!self.unread_only || *index < unread)
+                    && (needle.is_empty()
+                        || item.app.to_lowercase().contains(&needle)
+                        || item.body.to_lowercase().contains(&needle))
+            })
+            .collect();
+        if filtered.is_empty() {
+            ui.add_space(60.0);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("没有匹配的通知").size(13.0).strong().color(palette.muted));
+                ui.add_space(3.0);
+                ui.label(RichText::new("试试清空搜索，或切换到「全部」").size(10.5).color(palette.faint));
+            });
+            return;
+        }
         let height = (ui.available_height() - 58.0).max(60.0);
         egui::ScrollArea::vertical()
             .id_salt("notification-history")
@@ -269,7 +342,7 @@ impl Popup {
             .max_height(height)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                for (index, item) in self.items.iter().enumerate() {
+                for (index, item) in filtered.iter().copied() {
                     let unread = index < self.unread;
                     let id = item.id.clone();
                     let body = item.body.clone();
@@ -305,6 +378,16 @@ impl Popup {
                                         .clicked()
                                     {
                                         *action = Action::Delete(id.clone());
+                                    }
+                                    if ui
+                                        .add(
+                                            egui::Button::new(RichText::new("静音").size(10.0).color(palette.faint))
+                                                .frame(false),
+                                        )
+                                        .on_hover_text("不再提醒此应用")
+                                        .clicked()
+                                    {
+                                        *action = Action::MuteApp(item.source_id.clone(), item.app.clone());
                                     }
                                     if ui
                                         .add(
@@ -399,8 +482,8 @@ mod tests {
     fn sample() -> Vec<Notification> {
         let now = chrono::Local::now().timestamp();
         vec![
-            Notification { app: "微信".into(), body: "项目群里有人 @ 你，记得看一下新的需求文档。".into(), at: now, id: "a".into() },
-            Notification { app: "Outlook".into(), body: "周会提醒：今天 15:00 开始".into(), at: now - 3600, id: "b".into() },
+            Notification { app: "微信".into(), body: "项目群里有人 @ 你，记得看一下新的需求文档。".into(), at: now, source_id: "wechat.exe".into(), id: "a".into() },
+            Notification { app: "Outlook".into(), body: "周会提醒：今天 15:00 开始".into(), at: now - 3600, source_id: "outlook.exe".into(), id: "b".into() },
         ]
     }
 
@@ -416,6 +499,24 @@ mod tests {
         popup.open(Vec::new(), 0, String::new());
         let rendered = render(&mut popup, true);
         assert!(contains(&rendered.shapes, "还没有收到通知"));
+    }
+
+    #[test]
+    fn search_and_unread_filter_narrow_the_list() {
+        let mut popup = Popup::default();
+        popup.open(sample(), 1, String::new());
+        popup.query = "需求".into();
+        let rendered = render(&mut popup, true);
+        assert!(contains(&rendered.shapes, "微信"), "搜索命中应保留微信");
+        assert!(!contains(&rendered.shapes, "Outlook"), "不匹配的条目应被过滤");
+        popup.query = "不存在的关键字".into();
+        let rendered = render(&mut popup, true);
+        assert!(contains(&rendered.shapes, "没有匹配的通知"));
+        popup.query.clear();
+        popup.unread_only = true;
+        let rendered = render(&mut popup, true);
+        assert!(contains(&rendered.shapes, "微信"));
+        assert!(!contains(&rendered.shapes, "Outlook"), "只看未读应隐藏已读条目");
     }
 
     #[test]

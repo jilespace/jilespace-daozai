@@ -13,7 +13,10 @@ pub struct Notification {
     pub body: String,
     /// 本地时间戳（秒）。
     pub at: i64,
-    /// 来源通知 id；系统通知用 Windows 通知 Id，岛内提醒用标题+时间。
+    /// 应用源的稳定标识（Windows AUMID）；用于按应用静音。
+    #[serde(default)]
+    pub source_id: String,
+    /// 条目自身的唯一 id（应用 + 正文摘要），用于删除与去重。
     #[serde(default)]
     pub id: String,
 }
@@ -42,17 +45,18 @@ impl Store {
         }
     }
 
-    /// 记录一条通知；相同 id 的重复回调只保留最新正文。
-    pub fn push(&mut self, app: String, id: String, body: String) -> bool {
+    /// 记录一条通知；同一应用、同一正文的重复回调只保留一份，不同消息都会保留。
+    pub fn push(&mut self, app: String, source_id: String, body: String) -> bool {
         let app = if app.trim().is_empty() { "Windows 通知".to_string() } else { app.trim().to_string() };
         let body = body.trim().to_string();
         if body.is_empty() {
             return false;
         }
-        let id = if id.trim().is_empty() { format!("{app}:{body}") } else { id.trim().to_string() };
+        let source_id = source_id.trim().to_string();
+        let id = format!("{}#{:08x}", if source_id.is_empty() { app.as_str() } else { source_id.as_str() }, fnv1a(body.as_bytes()));
         let now = chrono::Local::now().timestamp();
-        self.items.retain(|item| !(item.id == id && item.app == app));
-        self.items.insert(0, Notification { app, body, at: now, id });
+        self.items.retain(|item| item.id != id);
+        self.items.insert(0, Notification { app, body, at: now, source_id, id });
         self.items.truncate(LIMIT);
         self.save();
         true
@@ -68,7 +72,7 @@ impl Store {
         let now = chrono::Local::now().timestamp();
         let id = format!("{title}:{}", now / 60);
         self.items.retain(|item| !(item.id == id && item.app == app));
-        self.items.insert(0, Notification { app, body: format!("{title} · {body}"), at: now, id });
+        self.items.insert(0, Notification { app, body: format!("{title} · {body}"), at: now, source_id: String::new(), id });
         self.items.truncate(LIMIT);
         self.save();
     }
@@ -111,6 +115,15 @@ impl Store {
     }
 }
 
+fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for byte in bytes {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
 fn path() -> std::path::PathBuf {
     crate::model::config_dir().join("notifications.json")
 }
@@ -144,9 +157,12 @@ mod tests {
         assert!(store.push("微信".into(), "2".into(), "在吗".into()));
         assert!(!store.push("微信".into(), "3".into(), "   ".into()));
         // 相同 id 只保留最新正文，且移到最前。
+        // 同一应用的不同消息都要保留；完全相同的回调只保留一份。
         store.push("微信".into(), "1".into(), "你好呀".into());
-        assert_eq!(store.items.len(), 2);
+        assert_eq!(store.items.len(), 3);
         assert_eq!(store.items[0].body, "你好呀");
+        store.push("微信".into(), "1".into(), "你好呀".into());
+        assert_eq!(store.items.len(), 3);
         for index in 0..(LIMIT + 10) {
             store.push("应用".into(), format!("id-{index}"), format!("第 {index} 条"));
         }

@@ -432,6 +432,13 @@ impl Shell {
                     self.app.notifications_unread(),
                 );
             }
+            daozai::notifications_ui::Action::MuteApp(source_id, app) => {
+                if self.app.mute_notification_app(&source_id, &app) {
+                    self.app.say(format!("已静音「{app}」的通知"));
+                } else {
+                    self.app.say(format!("「{app}」已经在静音列表中"));
+                }
+            }
             daozai::notifications_ui::Action::Clear => {
                 self.app.notifications_clear();
                 self.notifications_popup.sync(Vec::new(), 0);

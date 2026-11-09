@@ -1255,6 +1255,30 @@ impl App {
         }
     }
 
+    /// 静音某个应用的通知（写入应用通知开关并持久化）。
+    pub fn mute_notification_app(&mut self, source_id: &str, name: &str) -> bool {
+        let source_id = source_id.trim();
+        let name = name.trim();
+        if let Some(entry) = self.notification_apps.items.iter_mut().find(|(id, app_name, _)| {
+            (!source_id.is_empty() && id.eq_ignore_ascii_case(source_id))
+                || (!name.is_empty() && app_name.eq_ignore_ascii_case(name))
+        }) {
+            if !entry.2 {
+                return false;
+            }
+            entry.2 = false;
+            self.notification_apps.save();
+            return true;
+        }
+        if source_id.is_empty() && name.is_empty() {
+            return false;
+        }
+        let id = if source_id.is_empty() { name.to_string() } else { source_id.to_string() };
+        self.notification_apps.items.push((id, name.to_string(), false));
+        self.notification_apps.save();
+        true
+    }
+
     pub fn processes_event(&mut self, snapshot: crate::processes::Snapshot) {
         self.processes = snapshot;
     }
