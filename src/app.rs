@@ -39,6 +39,16 @@ pub const WIN_W: f32 = 640.0; // 窗口（透明画布）
 pub const CANVAS_W: f32 = WIN_W + 640.0; // 为右侧通知预留透明画布，原岛仍按 WIN_W 定位。
 pub const WIN_H: f32 = 270.0;
 pub(crate) const PAGE_NAMES: [&str; 8] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程"];
+pub(crate) const PAGE_DESCRIPTIONS: [&str; 8] = [
+    "播放控制与同步歌词",
+    "番茄钟与休息计时",
+    "饮水记录与提醒",
+    "临时收纳文件位置",
+    "任务清单与到期提醒",
+    "邮件摘要与验证码",
+    "Agent 剩余额度和账号切换",
+    "月历、邮件邀请与工作日程",
+];
 
 // ---------- 动效参数 ----------
 /// 悬停意图缓冲：光标停留这么久才真正展开（期间药丸轻微胀大作为反馈），防误触。
@@ -915,9 +925,45 @@ impl App {
         self.w.tune(OPEN_W.0,OPEN_W.1);self.h.tune(OPEN_H.0,OPEN_H.1);
         self.w.target=PW;self.h.target=self.expanded_height();
     }
+
+    /// 命令面板用：当前可见页面的顺序与说明。
+    pub fn palette_snapshot(&self) -> crate::command_palette::Snapshot {
+        let pages = self
+            .settings
+            .page_order
+            .iter()
+            .copied()
+            .filter(|page| self.settings.visible_pages[*page])
+            .map(|index| crate::command_palette::PageInfo {
+                index,
+                name: PAGE_NAMES[index],
+                description: PAGE_DESCRIPTIONS[index],
+            })
+            .collect();
+        crate::command_palette::Snapshot {
+            pages,
+            clipboard_enabled: self.settings.clipboard_enabled,
+            clipboard_paused: self.settings.clipboard_paused,
+            focus_running: self.pomo.running,
+        }
+    }
+
+    /// 命令面板用：开始/暂停专注计时，并把岛体切到专注页。
+    pub fn toggle_focus(&mut self) {
+        if self.pomo.remaining <= 0.0 {
+            self.pomo.remaining = self.phase_secs(self.pomo.phase);
+        }
+        self.pomo.running = !self.pomo.running;
+        self.show_page(1);
+    }
     pub fn open_settings(&mut self){
         self.settings_open=true;
         self.settings_focus_requested=true;
+    }
+    /// 命令面板用：直接打开设置并切到指定标签。
+    pub fn open_settings_tab(&mut self, tab: usize) {
+        self.settings_tab = tab.min(12);
+        self.open_settings();
     }
     pub fn open_settings_category(&mut self,category:usize){
         self.settings_category=category.min(3);

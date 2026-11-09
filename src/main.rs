@@ -58,6 +58,7 @@ struct Shell {
     clipboard_prev: Option<windows::Win32::Foundation::HWND>,
     clipboard_transfer: Option<(String, bool)>,
     clipboard_status: String,
+    command_palette: daozai::command_palette::Panel,
 }
 
 impl Shell {
@@ -136,6 +137,7 @@ impl Shell {
             clipboard_prev: None,
             clipboard_transfer: None,
             clipboard_status: String::new(),
+            command_palette: daozai::command_palette::Panel::default(),
         }
     }
 
@@ -148,6 +150,7 @@ impl Shell {
                 Event::OpenSettings=>self.app.open_settings(),
                 Event::OpenCalendar=>self.app.open_calendar(None),
                 Event::OpenClipboard=>self.open_clipboard(ctx, false),
+                Event::OpenCommandPalette=>self.open_command_palette(ctx),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -174,6 +177,7 @@ impl Shell {
     }
 
     fn open_clipboard(&mut self, ctx: &egui::Context, restore: bool) {
+        self.command_palette.close();
         #[cfg(windows)]
         {
             let previous = if restore { daozai::native::external_foreground_window() } else { None };
@@ -329,6 +333,85 @@ impl Shell {
         self.clipboard.copy(&id);
     }
 
+    fn open_command_palette(&mut self, ctx: &egui::Context) {
+        // 两个浮层互斥：同时打开会互相抢焦点。
+        if self.clipboard_popup.open {
+            self.close_clipboard(false);
+        }
+        let snapshot = self.app.palette_snapshot();
+        self.command_palette.open(&snapshot);
+        #[cfg(windows)]
+        let error = self.native.as_ref().and_then(|native| native.command_hotkey_error.clone());
+        #[cfg(not(windows))]
+        let error = None;
+        self.command_palette.set_hotkey_error(error);
+        ctx.request_repaint();
+    }
+
+    fn close_command_palette(&mut self) {
+        self.command_palette.close();
+    }
+
+    fn show_command_palette(&mut self, ctx: &egui::Context) {
+        use daozai::command_palette::Action as PaletteAction;
+        if !self.command_palette.is_open() {
+            return;
+        }
+        // 命令面板与剪贴板共用同一套浮层外观，跟随系统深浅色。
+        let dark = daozai::settings_theme::system_dark(ctx);
+        match self.command_palette.show(ctx, dark) {
+            PaletteAction::None => {}
+            PaletteAction::Close => self.close_command_palette(),
+            PaletteAction::OpenSettings(tab) => {
+                self.close_command_palette();
+                self.app.open_settings_tab(tab);
+                ctx.request_repaint();
+            }
+            PaletteAction::OpenPage(page) => {
+                self.close_command_palette();
+                self.app.show_page(page);
+            }
+            PaletteAction::OpenCalendar => {
+                self.close_command_palette();
+                self.app.open_calendar(None);
+            }
+            PaletteAction::OpenClipboard => {
+                self.close_command_palette();
+                self.open_clipboard(ctx, true);
+            }
+            PaletteAction::LaunchApp(path) => {
+                self.close_command_palette();
+                if let Err(error) = open_path(&path) {
+                    self.app.say(format!("无法启动应用：{error}"));
+                }
+            }
+            PaletteAction::CopyText(text) => {
+                self.close_command_palette();
+                ctx.copy_text(text);
+                self.app.say("已复制计算结果");
+            }
+            PaletteAction::SetClipboardPaused(paused) => {
+                self.close_command_palette();
+                self.app.settings.clipboard_paused = paused;
+                self.app.settings.save();
+                self.app.say(if paused { "剪贴板记录已暂停" } else { "剪贴板记录已恢复" });
+            }
+            PaletteAction::SetClipboardEnabled(enabled) => {
+                self.close_command_palette();
+                self.app.settings.clipboard_enabled = enabled;
+                if enabled {
+                    self.app.settings.clipboard_paused = false;
+                }
+                self.app.settings.save();
+                self.app.say(if enabled { "已开启剪贴板历史" } else { "已关闭剪贴板历史" });
+            }
+            PaletteAction::ToggleFocus => {
+                self.close_command_palette();
+                self.app.toggle_focus();
+            }
+        }
+    }
+
     fn env(&mut self, ctx: &egui::Context) -> Env {
         let (clock, today, date) = local_now();
         // 电量变化很慢，每 5 秒读一次就够
@@ -387,6 +470,14 @@ impl eframe::App for Shell {
                 self.close_clipboard(true);
             } else {
                 self.open_clipboard(ctx, true);
+            }
+        }
+        #[cfg(windows)]
+        if daozai::native::take_command_hotkey() {
+            if self.command_palette.is_open() {
+                self.command_palette.close();
+            } else {
+                self.open_command_palette(ctx);
             }
         }
         self.poll_clipboard();
@@ -559,9 +650,10 @@ impl eframe::App for Shell {
         self.app.settings_ui(ctx, autostart);
         self.app.mail_reader_ui(ctx);
         self.show_clipboard(ctx);
+        self.show_command_palette(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after

@@ -4,6 +4,7 @@
 //! 圆角与柔和阴影；所有交互状态（未开启、暂停、空列表、无匹配、写入失败、
 //! 删除撤销）都在同一块面板里给足反馈，不把错误丢到岛体上。
 use crate::clipboard::Item;
+use crate::panel::{self, chip_button, draw_search_icon, hint, icon_button, keycap, link_button, mix, section_label, with_alpha, Palette};
 use crate::theme::{self, W};
 use eframe::egui::{
     self, Align, Color32, FontId, Key, Layout, Modifiers, Pos2, Rect, RichText, Sense, Stroke,
@@ -352,65 +353,19 @@ impl Popup {
 
     /// 面板本体。拆出来是为了让录制器与测试不必真的创建窗口也能渲染和交互。
     pub fn panel_ui(&mut self, ctx: &egui::Context, dark: bool) -> Action {
-        let palette = Palette::new(dark);
-        let mut style = (*ctx.style()).clone();
-        style.visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
-        style.visuals.window_fill = palette.raised;
-        style.visuals.window_stroke = Stroke::new(1.0_f32, palette.line);
-        style.visuals.window_corner_radius = egui::CornerRadius::same(12);
-        style.visuals.menu_corner_radius = egui::CornerRadius::same(10);
-        style.visuals.panel_fill = palette.surface;
-        style.visuals.extreme_bg_color = palette.raised;
-        style.visuals.faint_bg_color = palette.raised;
-        style.visuals.code_bg_color = palette.raised;
-        style.visuals.hyperlink_color = palette.accent;
-        style.visuals.override_text_color = Some(palette.text);
-        style.visuals.text_cursor.stroke = Stroke::new(1.5_f32, palette.accent);
-        style.visuals.selection.bg_fill = with_alpha(palette.accent, 0.32);
-        style.visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
-        let widgets = &mut style.visuals.widgets;
-        widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        widgets.hovered.weak_bg_fill = palette.hover;
-        widgets.active.weak_bg_fill = palette.hover;
-        widgets.inactive.bg_fill = palette.scroll_idle;
-        widgets.hovered.bg_fill = palette.scroll_hover;
-        widgets.active.bg_fill = palette.scroll_active;
-        widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.line_soft);
-        widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.line_soft);
-        widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.line_soft);
-        widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text);
-        widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.text);
-        widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.text);
-        widgets.inactive.corner_radius = egui::CornerRadius::same(7);
-        widgets.hovered.corner_radius = egui::CornerRadius::same(7);
-        widgets.active.corner_radius = egui::CornerRadius::same(7);
-        widgets.open = widgets.hovered;
-        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-        style.spacing.button_padding = Vec2::new(10.0, 5.0);
-        style.spacing.scroll.floating = false;
-        style.spacing.scroll.bar_width = 5.0;
-        style.spacing.scroll.bar_inner_margin = 3.0;
-        style.spacing.scroll.foreground_color = false;
-        ctx.set_style(style);
-
+        let palette = panel::apply_style(ctx, dark);
         let mut action = Action::None;
         let fade = self.fade.clamp(0.0, 1.0);
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(Color32::TRANSPARENT).inner_margin(PAD))
             .show(ctx, |ui| {
                 ui.set_opacity(fade);
-                let shadow = egui::epaint::Shadow {
-                    offset: [0, 14],
-                    blur: 34,
-                    spread: 0,
-                    color: Color32::from_black_alpha(if dark { 135 } else { 42 }),
-                };
                 egui::Frame::new()
                     .fill(palette.surface)
                     .stroke(Stroke::new(1.0_f32, palette.line))
                     .corner_radius(18.0)
                     .inner_margin(INNER)
-                    .shadow(shadow)
+                    .shadow(panel::shadow(dark))
                     .show(ui, |ui| {
                         ui.set_min_size(ui.available_size());
                         action = self.panel_content(ui, &palette);
@@ -635,6 +590,9 @@ impl Popup {
                 let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
                 draw_search_icon(ui, icon_rect, p.faint);
                 ui.add_space(1.0);
+                // 有内容时为右侧清除按钮留位置；没有内容时占满整行，避免视觉上多出一段空白。
+                let reserve = if self.query.is_empty() { 8.0 } else { 40.0 };
+                let edit_width = (ui.available_width() - reserve).max(80.0);
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
                         .id_source("clipboard-search")
@@ -646,7 +604,7 @@ impl Popup {
                         .font(theme::font(13.0, W::Regular))
                         .text_color(p.text)
                         .frame(false)
-                        .desired_width(f32::INFINITY),
+                        .desired_width(edit_width),
                 );
                 focused = response.has_focus();
                 if self.request_focus {
@@ -1162,7 +1120,7 @@ fn row(
     let radius = 9.0;
     let body = rect.shrink2(Vec2::new(0.0, 1.0));
     if selected {
-        painter.rect_filled(body, radius, blend(p.surface, p.accent, 0.13));
+        painter.rect_filled(body, radius, mix(p.surface, p.accent, 0.13));
         painter.rect_stroke(
             body,
             radius,
@@ -1175,14 +1133,14 @@ fn row(
             p.accent,
         );
     } else if hover > 0.01 {
-        painter.rect_filled(body, radius, blend(p.surface, p.hover, hover));
+        painter.rect_filled(body, radius, mix(p.surface, p.hover, hover));
     }
     let kind = item_kind(&item.text);
     let icon_rect = Rect::from_min_size(
         Pos2::new(rect.left() + 10.0, rect.center().y - 17.0),
         Vec2::splat(34.0),
     );
-    let tile = if selected { blend(p.raised, p.accent, 0.20) } else { p.raised };
+    let tile = if selected { mix(p.raised, p.accent, 0.20) } else { p.raised };
     painter.rect_filled(icon_rect, 9.0, tile);
     draw_kind_icon(&painter, icon_rect, kind, if selected { p.accent } else { p.faint });
     let (line, range) = display_line(&item.text, query);
@@ -1417,14 +1375,6 @@ fn draw_clipboard_icon(ui: &Ui, rect: Rect, color: Color32) {
     );
 }
 
-fn draw_search_icon(ui: &Ui, rect: Rect, color: Color32) {
-    let painter = ui.painter();
-    painter.circle_stroke(rect.center() - Vec2::new(1.5, 1.5), 5.5, Stroke::new(1.7_f32, color));
-    painter.line_segment(
-        [rect.center() + Vec2::new(2.2, 2.2), rect.right_bottom() - Vec2::new(2.0, 2.0)],
-        Stroke::new(1.7_f32, color),
-    );
-}
 
 fn draw_kind_icon(painter: &egui::Painter, rect: Rect, kind: ItemKind, color: Color32) {
     let center = rect.center();
@@ -1499,35 +1449,6 @@ fn draw_empty_icon(painter: &egui::Painter, rect: Rect, p: &Palette, kind: Empty
     }
 }
 
-fn section_label(ui: &mut Ui, label: &str, p: &Palette) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::hover());
-    ui.painter().text(
-        Pos2::new(rect.left() + 4.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        theme::font(10.0, W::Semibold),
-        p.faint,
-    );
-}
-
-fn keycap(ui: &mut Ui, label: &str, p: &Palette) {
-    let font = theme::font(9.5, W::Regular);
-    let galley = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, p.muted));
-    let width = (galley.size().x + 12.0).max(24.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::hover());
-    ui.painter().rect_filled(rect, 5.0, p.raised);
-    ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.0_f32, p.line_soft), StrokeKind::Inside);
-    ui.painter().galley(
-        Pos2::new(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        p.muted,
-    );
-}
-
-fn hint(ui: &mut Ui, key: &str, label: &str, p: &Palette) {
-    keycap(ui, key, p);
-    ui.label(RichText::new(label).font(theme::font(10.5, W::Regular)).color(p.faint));
-}
 
 fn target_chip(ui: &mut Ui, label: &str, p: &Palette) {
     let font = theme::font(11.5, W::Semibold);
@@ -1544,50 +1465,6 @@ fn target_chip(ui: &mut Ui, label: &str, p: &Palette) {
     response.on_hover_text("会把内容写回这个窗口，再模拟一次 Ctrl+V");
 }
 
-fn icon_button(ui: &mut Ui, glyph: &str, idle: Color32, hover_color: Color32, hover_bg: Color32, size: f32) -> bool {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-    if response.hovered() {
-        ui.painter().circle_filled(rect.center(), 13.0, hover_bg);
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        theme::font(size, W::Regular),
-        if response.hovered() { hover_color } else { idle },
-    );
-    let _ = response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.clicked()
-}
-
-fn chip_button(ui: &mut Ui, label: &str, color: Color32, background: Color32) -> bool {
-    let font = theme::font(10.5, W::Semibold);
-    let galley = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, color));
-    let size = Vec2::new(galley.size().x + 18.0, 20.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let background = if response.hovered() { with_alpha(background, 0.85) } else { background };
-    ui.painter().rect_filled(rect, 10.0, background);
-    ui.painter().galley(
-        Pos2::new(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        color,
-    );
-    response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
-}
-
-fn link_button(ui: &mut Ui, label: &str, p: &Palette) -> bool {
-    let font = theme::font(11.5, W::Semibold);
-    let galley = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, p.accent));
-    let (rect, response) = ui.allocate_exact_size(galley.size() + Vec2::new(4.0, 2.0), Sense::click());
-    ui.painter().galley(rect.min, galley, p.accent);
-    let hover = ui.ctx().animate_bool_with_time(egui::Id::new(("clip-link", label)), response.hovered(), 0.10);
-    let width = rect.width() * hover;
-    ui.painter().line_segment(
-        [Pos2::new(rect.left(), rect.bottom()), Pos2::new(rect.left() + width, rect.bottom())],
-        Stroke::new(1.0_f32, p.accent),
-    );
-    response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
-}
 
 fn tab_button(ui: &mut Ui, p: &Palette, label: &str, count: usize, active: bool) -> bool {
     let label_font = theme::font(12.0, if active { W::Semibold } else { W::Regular });
@@ -1643,87 +1520,6 @@ pub fn relative_time(now: i64, at: i64) -> String {
     }
 }
 
-// ---------------------------------------------------------------- 配色
-
-struct Palette {
-    surface: Color32,
-    raised: Color32,
-    hover: Color32,
-    line: Color32,
-    line_soft: Color32,
-    text: Color32,
-    muted: Color32,
-    faint: Color32,
-    accent: Color32,
-    danger: Color32,
-    warn: Color32,
-    scroll_idle: Color32,
-    scroll_hover: Color32,
-    scroll_active: Color32,
-}
-
-impl Palette {
-    fn new(dark: bool) -> Self {
-        if dark {
-            Self {
-                surface: rgb(30, 31, 34),
-                raised: rgb(39, 40, 44),
-                hover: rgb(47, 48, 53),
-                line: rgb(64, 65, 70),
-                line_soft: rgb(52, 53, 58),
-                text: rgb(246, 247, 249),
-                muted: rgb(166, 168, 175),
-                faint: rgb(122, 124, 131),
-                accent: theme::BLUE,
-                danger: rgb(255, 112, 112),
-                warn: theme::YELLOW,
-                scroll_idle: rgb(78, 80, 86),
-                scroll_hover: rgb(98, 100, 107),
-                scroll_active: rgb(120, 122, 130),
-            }
-        } else {
-            Self {
-                surface: rgb(251, 252, 253),
-                raised: rgb(244, 246, 249),
-                hover: rgb(236, 239, 244),
-                line: rgb(222, 226, 232),
-                line_soft: rgb(232, 235, 240),
-                text: rgb(30, 34, 41),
-                muted: rgb(104, 110, 120),
-                faint: rgb(142, 147, 156),
-                accent: rgb(28, 118, 208),
-                danger: rgb(196, 54, 64),
-                warn: rgb(180, 118, 10),
-                scroll_idle: rgb(205, 209, 217),
-                scroll_hover: rgb(188, 193, 202),
-                scroll_active: rgb(168, 174, 185),
-            }
-        }
-    }
-}
-
-fn rgb(r: u8, g: u8, b: u8) -> Color32 {
-    Color32::from_rgb(r, g, b)
-}
-
-fn with_alpha(color: Color32, alpha: f32) -> Color32 {
-    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (255.0 * alpha.clamp(0.0, 1.0)) as u8)
-}
-
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
-    let t = t.clamp(0.0, 1.0);
-    let channel = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8;
-    Color32::from_rgba_unmultiplied(
-        channel(a.r(), b.r()),
-        channel(a.g(), b.g()),
-        channel(a.b(), b.b()),
-        channel(a.a(), b.a()),
-    )
-}
-
-fn blend(bottom: Color32, top: Color32, t: f32) -> Color32 {
-    mix(bottom, top, t)
-}
 
 #[cfg(test)]
 mod tests {

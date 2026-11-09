@@ -1041,6 +1041,28 @@ impl App {
                             ui.separator();
                             setting_row(ui,"全屏时隐藏","游戏、视频和演示全屏时隐藏",&mut self.settings.hide_fullscreen);
                         });
+                        settings_label(ui,"全局快捷键");
+                        settings_card(ui,|ui|{
+                            for (name, description, keys) in [
+                                ("命令面板","搜索页面、设置与已安装应用，也可直接计算或换算",crate::command_palette::HOTKEY_TEXT),
+                                ("剪贴板历史","搜索并粘贴最近复制的文本",crate::clipboard::HOTKEY_TEXT),
+                            ] {
+                                ui.horizontal(|ui|{
+                                    ui.vertical(|ui|{
+                                        ui.label(egui::RichText::new(name).size(12.5).color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
+                                        ui.label(egui::RichText::new(description).size(11.0).color(settings_color(ctx,Color32::from_gray(175),Color32::from_gray(95))));
+                                    });
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                        egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(40,40,44),Color32::from_rgb(231,234,240))).corner_radius(5.0).inner_margin(egui::Margin::symmetric(9,4)).show(ui,|ui|{
+                                            ui.label(egui::RichText::new(keys).size(11.5).strong().color(settings_color(ctx,Color32::from_gray(225),Color32::from_gray(55))));
+                                        });
+                                    });
+                                });
+                                ui.separator();
+                            }
+                            ui.add_space(3.0);
+                            ui.label(egui::RichText::new("热键被其他程序占用时，仍可从托盘菜单打开；剪贴板状态见「剪贴板」设置。").size(11.0).color(settings_color(ctx,Color32::from_gray(175),Color32::from_gray(95))));
+                        });
                     }
                     1=>{
                         settings_label(ui,"歌词");

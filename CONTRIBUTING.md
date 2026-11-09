@@ -30,6 +30,7 @@ cargo run --locked --bin daozai
 | `src/mail.rs`、`src/mail_reader.rs` | IMAP、MIME、验证码与邮件阅读 |
 | `src/quota*.rs` 及 provider 模块 | AI 额度与连接 |
 | `src/clipboard.rs`、`src/clipboard_ui.rs` | 剪贴板历史服务与快捷面板 |
+| `src/command_palette.rs`、`src/panel.rs` | 命令面板、应用检索、计算/换算与浮层视觉令牌 |
 | `src/native.rs`、`src/system.rs` | 原生窗口、输入、拖放和系统事件 |
 | `src/ui_tests.rs` | 无窗口交互与布局回归测试 |
 | `src/bin/daozai-record` | 合成数据演示与软件渲染器 |

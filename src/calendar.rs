@@ -959,6 +959,8 @@ mod tests {
                 let mut paths=Vec::new();
                 while stop_rx.try_recv().is_err() {
                     let Ok((mut stream,_))=listener.accept() else {std::thread::sleep(Duration::from_millis(5));continue;};
+                    // Windows 上 accepted socket 可能继承监听端的非阻塞状态，显式切回阻塞读取。
+                    stream.set_nonblocking(false).unwrap();
                     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                     let mut request=String::new();
                     while !request.contains("\r\n\r\n") {
@@ -980,7 +982,7 @@ mod tests {
             });
             let cfg=Config{provider,username:"synthetic".into(),href:None,server:Some(base.clone())};
             let result=discover(&agent(),&cfg,"synthetic-password");
-            stop_tx.send(()).unwrap();let paths=worker.join().unwrap();
+            let _=stop_tx.send(());let paths=worker.join().unwrap();
             assert_eq!(result.unwrap(),format!("{base}dav/calendars/account/primary/"));
             assert_eq!(paths,vec!["/","/.well-known/caldav","/dav/principals/","/dav/principals/account/","/dav/calendars/account/"]);
         }
