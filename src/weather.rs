@@ -6,7 +6,7 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 
-use chrono::{Local, NaiveDateTime, Timelike};
+use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_CITY: &str = "北京";
@@ -33,6 +33,23 @@ pub struct Hour {
     pub temperature: f32,
     pub code: u16,
     pub precip_chance: Option<u8>,
+    #[serde(default = "default_true")]
+    pub is_day: bool,
+}
+
+/// 多日预报的一行。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Day {
+    /// `今天`、`明天` 或 `周三`。
+    pub label: String,
+    pub code: u16,
+    pub high: Option<f32>,
+    pub low: Option<f32>,
+    pub precip_chance: Option<u8>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,7 +69,14 @@ pub struct Weather {
     /// 本地时间戳（秒）。
     pub updated_at: i64,
     pub hourly: Vec<Hour>,
+    #[serde(default)]
+    pub days: Vec<Day>,
+    #[serde(default)]
+    pub sunrise: Option<String>,
+    #[serde(default)]
+    pub sunset: Option<String>,
 }
+
 
 impl Weather {
     pub fn kind(&self) -> Kind {
@@ -149,6 +173,39 @@ pub fn parse_forecast(
     let high = f32_of(&daily["temperature_2m_max"][0]);
     let low = f32_of(&daily["temperature_2m_min"][0]);
     let precip_chance = u8_percent(&daily["precipitation_probability_max"][0]);
+    let sunrise = daily["sunrise"][0]
+        .as_str()
+        .and_then(|stamp| stamp.split_once('T').map(|(_, time)| time.get(0..5).unwrap_or(time).to_string()));
+    let sunset = daily["sunset"][0]
+        .as_str()
+        .and_then(|stamp| stamp.split_once('T').map(|(_, time)| time.get(0..5).unwrap_or(time).to_string()));
+    let mut days = Vec::new();
+    if let (Some(times), Some(codes)) = (daily["time"].as_array(), daily["weather_code"].as_array()) {
+        let highs = daily["temperature_2m_max"].as_array();
+        let lows = daily["temperature_2m_min"].as_array();
+        let precip = daily["precipitation_probability_max"].as_array();
+        let weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+        for (index, time) in times.iter().take(3).enumerate() {
+            let Some(date) = time
+                .as_str()
+                .and_then(|text| chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").ok())
+            else {
+                continue;
+            };
+            let label = match (date - now.date_naive()).num_days() {
+                0 => "今天".to_string(),
+                1 => "明天".to_string(),
+                _ => weekdays[date.weekday().num_days_from_sunday() as usize].to_string(),
+            };
+            days.push(Day {
+                label,
+                code: codes.get(index).and_then(|value| value.as_u64()).unwrap_or(0) as u16,
+                high: highs.and_then(|items| items.get(index)).and_then(f32_of),
+                low: lows.and_then(|items| items.get(index)).and_then(f32_of),
+                precip_chance: precip.and_then(|items| items.get(index)).and_then(u8_percent),
+            });
+        }
+    }
 
     let mut hourly = Vec::new();
     if let (Some(times), Some(temps), Some(codes)) = (
@@ -157,6 +214,7 @@ pub fn parse_forecast(
         value["hourly"]["weather_code"].as_array(),
     ) {
         let precip = value["hourly"]["precipitation_probability"].as_array();
+        let is_day_values = value["hourly"]["is_day"].as_array();
         let target = now
             .with_minute(0)
             .and_then(|time| time.with_second(0))
@@ -202,7 +260,11 @@ pub fn parse_forecast(
             } else {
                 format!("{}时", stamp.hour())
             };
-            hourly.push(Hour { label, temperature, code, precip_chance });
+            let is_day = is_day_values
+                .and_then(|items| items.get(index))
+                .and_then(|value| value.as_u64())
+                .map_or(true, |value| value != 0);
+            hourly.push(Hour { label, temperature, code, precip_chance, is_day });
         }
     }
 
@@ -221,6 +283,9 @@ pub fn parse_forecast(
         precip_chance,
         updated_at: now.timestamp(),
         hourly,
+        days,
+        sunrise,
+        sunset,
     })
 }
 
@@ -387,7 +452,7 @@ fn fetch(client: &ureq::Agent, city: &str, cache: Option<&Weather>, events: &Sen
 
 fn forecast_url(latitude: f64, longitude: f64) -> String {
     format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={latitude:.4}&longitude={longitude:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&hourly=temperature_2m,weather_code,precipitation_probability&forecast_days=2&timezone=auto&wind_speed_unit=kmh"
+        "https://api.open-meteo.com/v1/forecast?latitude={latitude:.4}&longitude={longitude:.4}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset&hourly=temperature_2m,weather_code,precipitation_probability,is_day&forecast_days=3&timezone=auto&wind_speed_unit=kmh"
     )
 }
 
@@ -404,7 +469,7 @@ mod tests {
     use chrono::TimeZone;
 
     const GEOCODE: &str = r#"{"results":[{"id":1816670,"name":"北京","latitude":39.9075,"longitude":116.39723,"country":"中国"}]}"#;
-    const FORECAST: &str = r#"{"current":{"time":"2026-11-10T04:00","temperature_2m":0.4,"apparent_temperature":-2.6,"relative_humidity_2m":79,"weather_code":0,"is_day":0,"wind_speed_10m":3.0},"hourly":{"time":["2026-11-10T03:00","2026-11-10T04:00","2026-11-10T05:00","2026-11-10T06:00"],"temperature_2m":[-1.0,0.4,0.3,-1.0],"weather_code":[1,0,0,3],"precipitation_probability":[0,0,10,null]},"daily":{"weather_code":[0],"temperature_2m_max":[11.6],"temperature_2m_min":[0.1],"precipitation_probability_max":[15]}}"#;
+    const FORECAST: &str = r#"{"current":{"time":"2026-11-10T04:00","temperature_2m":0.4,"apparent_temperature":-2.6,"relative_humidity_2m":79,"weather_code":0,"is_day":0,"wind_speed_10m":3.0},"hourly":{"time":["2026-11-10T03:00","2026-11-10T04:00","2026-11-10T05:00","2026-11-10T06:00"],"temperature_2m":[-1.0,0.4,0.3,-1.0],"weather_code":[1,0,0,3],"precipitation_probability":[0,0,10,null],"is_day":[0,0,0,1]},"daily":{"time":["2026-11-10","2026-11-11","2026-11-12"],"weather_code":[0,61,3],"temperature_2m_max":[11.6,9.2,8.0],"temperature_2m_min":[0.1,1.4,0.0],"precipitation_probability_max":[15,70,20],"sunrise":["2026-11-10T06:52","2026-11-11T06:53","2026-11-12T06:54"],"sunset":["2026-11-10T16:58","2026-11-11T16:57","2026-11-12T16:56"]}}"#;
 
     fn now() -> chrono::DateTime<Local> {
         let utc = chrono::Utc.with_ymd_and_hms(2026, 11, 9, 20, 20, 0).unwrap();
@@ -435,6 +500,17 @@ mod tests {
         assert_eq!(weather.hourly.len(), 3);
         assert_eq!(weather.hourly[2].label, "6时");
         assert_eq!(weather.hourly[2].precip_chance, None);
+        // 逐小时昼夜标记与多日预报。
+        assert!(!weather.hourly[0].is_day);
+        assert!(weather.hourly[2].is_day);
+        assert_eq!(weather.days.len(), 3);
+        assert_eq!(weather.days[0].label, "今天");
+        assert_eq!(weather.days[1].label, "明天");
+        assert_eq!(weather.days[1].code, 61);
+        assert!((weather.days[1].high.unwrap() - 9.2).abs() < 1e-6);
+        assert_eq!(weather.days[1].precip_chance, Some(70));
+        assert_eq!(weather.sunrise.as_deref(), Some("06:52"));
+        assert_eq!(weather.sunset.as_deref(), Some("16:58"));
     }
 
     #[test]

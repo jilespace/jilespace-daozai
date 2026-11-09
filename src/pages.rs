@@ -992,12 +992,12 @@ impl App {
             crate::weather::Kind::Fog => Color32::from_gray(175),
             crate::weather::Kind::Cloud => Color32::from_gray(205),
         };
-        // 逐小时卡片的底色先画，随后左侧文字与卡片列都盖在上面。
-        if !w.hourly.is_empty() {
-            c.fill(208.0, 32.0, 167.0, 78.0, 9.0, theme::CARD);
+        let has_card = !w.hourly.is_empty() || !w.days.is_empty();
+        if has_card {
+            c.fill(208.0, 32.0, 167.0, 92.0, 9.0, theme::CARD);
         }
         c.glow(74.0, 64.0, 88.0, paint::alpha(accent, 0.10));
-        weather_glyph(c, 74.0, 62.0, 37.0, kind, w.is_day, (self.t * 0.5) as f32);
+        weather_glyph(c, 74.0, 62.0, 37.0, kind, w.is_day, (self.t * 0.5) as f32, Color32::BLACK);
         c.text(110.0, 76.0, &format!("{}°", w.temperature.round() as i32), 31.0, W::Bold, theme::WHITE, H::Left);
         let range = match (w.high, w.low) {
             (Some(high), Some(low)) => format!("{} · {}° / {}°", w.label(), high.round() as i32, low.round() as i32),
@@ -1026,40 +1026,105 @@ impl App {
             meta.push(format!("体感 {}°", apparent.round() as i32));
         }
         c.text(44.0, 122.0, &c.fit(&meta.join(" · "), 9.0, W::Regular, 160.0), 9.0, W::Regular, Color32::from_gray(125), H::Left);
-        // 左侧整块可点击刷新。
         if c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text("点击刷新天气").clicked() {
             self.request_weather_refresh();
         }
-        if !w.hourly.is_empty() {
-            let card = c.hit(208.0, 32.0, 167.0, 78.0, "weather-hourly");
+        if has_card {
+            // 卡片整块的悬停提示先登记，模式切换按钮再盖在它上面，避免吞掉点击。
+            let card = c.hit(208.0, 32.0, 167.0, 92.0, "weather-card");
             match error {
                 Some(error) => {
                     card.on_hover_text(format!("更新失败：{error}\n当前显示上次成功获取的数据"));
                     c.circle(368.0, 38.0, 2.0, Color32::from_rgb(226, 176, 96));
                 }
                 None => {
-                    card.on_hover_text("逐小时预报 · 点击左侧可刷新");
+                    card.on_hover_text("逐小时 / 多日预报 · 点击左侧可刷新");
                 }
             }
-            let columns = w.hourly.len().min(6);
-            let width = 167.0 / columns as f32;
-            for (index, hour) in w.hourly.iter().take(6).enumerate() {
-                let cx = 208.0 + width * (index as f32 + 0.5);
-                c.text(cx, 45.0, &hour.label, 7.6, W::Regular, Color32::from_gray(160), H::Center);
-                let hour_kind = crate::weather::kind(hour.code);
-                let hour_color = match hour_kind {
-                    crate::weather::Kind::Sun | crate::weather::Kind::Partly => theme::YELLOW,
-                    crate::weather::Kind::Rain => theme::BLUE,
-                    crate::weather::Kind::Snow => theme::CYAN,
-                    crate::weather::Kind::Thunder => theme::YELLOW,
-                    crate::weather::Kind::Fog => Color32::from_gray(175),
-                    crate::weather::Kind::Cloud => Color32::from_gray(200),
-                };
-                weather_glyph(c, cx, 60.0, 17.0, hour_kind, true, (self.t * 0.5) as f32);
-                c.text(cx, 77.0, &format!("{}°", hour.temperature.round() as i32), 9.5, W::Semibold, theme::WHITE, H::Center);
-                if let Some(chance) = hour.precip_chance.filter(|chance| *chance > 0) {
-                    c.text(cx, 89.0, &format!("{chance}%"), 7.6, W::Regular, paint::alpha(hour_color, 0.9), H::Center);
+            // 模式切换：逐小时 / 多日
+            let start = 208.0 + (167.0 - 96.0) / 2.0;
+            for (days_view, label, width) in [(false, "逐小时", 52.0f32), (true, "3 天", 40.0f32)] {
+                let selected = self.weather_days == days_view;
+                let x = if days_view { start + 56.0 } else { start };
+                let (hit, tab) = capsule(
+                    c,
+                    x,
+                    35.0,
+                    width,
+                    18.0,
+                    if days_view { "weather-tab-days" } else { "weather-tab-hours" },
+                    if selected { paint::mix(theme::CARD, accent, 0.26) } else { Color32::TRANSPARENT },
+                    if selected { paint::mix(theme::CARD, accent, 0.34) } else { paint::mix(theme::CARD, theme::WHITE, 0.08) },
+                );
+                tab.text(
+                    x + width / 2.0,
+                    48.0,
+                    label,
+                    8.5,
+                    W::Semibold,
+                    if selected { paint::mix(accent, theme::WHITE, 0.45) } else { Color32::from_gray(150) },
+                    H::Center,
+                );
+                if hit.clicked() {
+                    self.weather_days = days_view;
                 }
+            }
+            if self.weather_days && !w.days.is_empty() {
+                for (index, day) in w.days.iter().take(3).enumerate() {
+                    let y = 68.0 + index as f32 * 18.0;
+                    let day_kind = crate::weather::kind(day.code);
+                    let color = match day_kind {
+                        crate::weather::Kind::Sun | crate::weather::Kind::Partly => theme::YELLOW,
+                        crate::weather::Kind::Rain => theme::BLUE,
+                        crate::weather::Kind::Snow => theme::CYAN,
+                        crate::weather::Kind::Thunder => theme::YELLOW,
+                        crate::weather::Kind::Fog => Color32::from_gray(175),
+                        crate::weather::Kind::Cloud => Color32::from_gray(200),
+                    };
+                    c.text(216.0, y, &day.label, 9.0, W::Semibold, if index == 0 { theme::WHITE } else { Color32::from_gray(190) }, H::Left);
+                    weather_glyph(c, 258.0, y - 5.0, 15.0, day_kind, true, (self.t * 0.5) as f32, theme::CARD);
+                    if let Some(chance) = day.precip_chance.filter(|chance| *chance > 0) {
+                        c.text(278.0, y, &format!("{chance}%"), 7.6, W::Regular, paint::alpha(color, 0.9), H::Left);
+                    }
+                    let range = match (day.high, day.low) {
+                        (Some(high), Some(low)) => format!("{}° / {}°", high.round() as i32, low.round() as i32),
+                        _ => "-".to_string(),
+                    };
+                    c.text(367.0, y, &range, 9.0, W::Semibold, theme::WHITE, H::Right);
+                }
+            } else {
+                let columns = w.hourly.len().min(6);
+                let width = 167.0 / columns as f32;
+                for (index, hour) in w.hourly.iter().take(6).enumerate() {
+                    let cx = 208.0 + width * (index as f32 + 0.5);
+                    c.text(cx, 64.0, &hour.label, 7.4, W::Regular, Color32::from_gray(160), H::Center);
+                    let hour_kind = crate::weather::kind(hour.code);
+                    let hour_color = match hour_kind {
+                        crate::weather::Kind::Sun | crate::weather::Kind::Partly => theme::YELLOW,
+                        crate::weather::Kind::Rain => theme::BLUE,
+                        crate::weather::Kind::Snow => theme::CYAN,
+                        crate::weather::Kind::Thunder => theme::YELLOW,
+                        crate::weather::Kind::Fog => Color32::from_gray(175),
+                        crate::weather::Kind::Cloud => Color32::from_gray(200),
+                    };
+                    weather_glyph(c, cx, 75.0, 15.5, hour_kind, hour.is_day, (self.t * 0.5) as f32, theme::CARD);
+                    c.text(cx, 91.0, &format!("{}°", hour.temperature.round() as i32), 9.2, W::Semibold, theme::WHITE, H::Center);
+                    if let Some(chance) = hour.precip_chance.filter(|chance| *chance > 0) {
+                        c.text(cx, 102.0, &format!("{chance}%"), 7.2, W::Regular, paint::alpha(hour_color, 0.9), H::Center);
+                    }
+                }
+            }
+            // 日出日落放在卡片底部；多日卡片与逐小时共用。
+            if let (Some(sunrise), Some(sunset)) = (w.sunrise.as_deref(), w.sunset.as_deref()) {
+                c.text(
+                    291.5,
+                    119.0,
+                    &format!("日出 {sunrise} · 日落 {sunset}"),
+                    7.8,
+                    W::Regular,
+                    Color32::from_gray(140),
+                    H::Center,
+                );
             }
         }
     }
@@ -1223,24 +1288,33 @@ impl App {
 }
 
 /// 天气图标：太阳/云/雨雪/雷暴共用简单的矢量形状，太阳光线随时间缓慢转动。
-fn weather_glyph(c: &Card, cx: f32, cy: f32, size: f32, kind: crate::weather::Kind, is_day: bool, phase: f32) {
+fn weather_glyph(c: &Card, cx: f32, cy: f32, size: f32, kind: crate::weather::Kind, is_day: bool, phase: f32, bg: Color32) {
     use crate::weather::Kind;
     let sun = theme::YELLOW;
+    let moon = Color32::from_rgb(206, 219, 246);
     let cloud = Color32::from_gray(212);
     let draw_sun = |x: f32, y: f32, r: f32, rays: bool| {
-        if rays && is_day {
-            for index in 0..8 {
-                let angle = TAU * index as f32 / 8.0 + phase * 0.4;
-                let direction = (angle.cos(), angle.sin());
-                c.seg(
-                    (x + direction.0 * r * 1.30, y + direction.1 * r * 1.30),
-                    (x + direction.0 * r * 1.75, y + direction.1 * r * 1.75),
-                    1.6,
-                    sun,
-                );
+        if is_day {
+            if rays {
+                for index in 0..8 {
+                    let angle = TAU * index as f32 / 8.0 + phase * 0.4;
+                    let direction = (angle.cos(), angle.sin());
+                    c.seg(
+                        (x + direction.0 * r * 1.30, y + direction.1 * r * 1.30),
+                        (x + direction.0 * r * 1.75, y + direction.1 * r * 1.75),
+                        1.6,
+                        sun,
+                    );
+                }
             }
+            c.circle(x, y, r, sun);
+        } else {
+            // 月亮：整圆再叠一个背景色小圆，形成月牙。
+            c.circle(x, y, r, moon);
+            c.circle(x + r * 0.52, y - r * 0.22, r * 0.92, bg);
+            c.circle(x - r * 1.30, y - r * 0.55, size * 0.035, Color32::from_white_alpha(170));
+            c.circle(x - r * 0.75, y + r * 0.95, size * 0.025, Color32::from_white_alpha(140));
         }
-        c.circle(x, y, r, sun);
     };
     let cloud_at = |x: f32, y: f32, scale: f32| {
         let s = size * scale;
@@ -1298,7 +1372,6 @@ fn weather_glyph(c: &Card, cx: f32, cy: f32, size: f32, kind: crate::weather::Ki
         }
     }
 }
-
 /// 迷你曲线：面积淡填充 + 折线 + 末端光点；`phase` 让曲线随时间轻微左移。
 fn sparkline(
     c: &Card,

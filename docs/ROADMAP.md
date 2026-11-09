@@ -25,7 +25,7 @@
 | 命令面板 | `Ctrl+Alt+K` 搜索页面/设置/应用/算式/单位换算，`Enter` 执行或复制 | `command_palette.rs`、`panel.rs`、`native.rs`、`tray.rs` |
 | 系统状态 | CPU/内存/网络/磁盘每秒采样，48 秒趋势曲线与容量条 | `perf.rs`、`pages.rs`、`main.rs` |
 | 计时 | 倒计时与秒表；倒计时运行时收起药丸显示剩余时间 | `app.rs`、`pages.rs` |
-| 天气 | 当前天气、体感/湿度/风与 6 小时预报；Open-Meteo + 本机缓存 | `weather.rs`、`pages.rs`、`main.rs` |
+| 天气 | 当前天气、体感/湿度/风、逐小时与 3 天预报、夜间月亮态、日出日落；Open-Meteo + 本机缓存 | `weather.rs`、`pages.rs`、`main.rs` |
 | 岛体外观 | 不透明度/圆角/动效强度，设置页实时预览 | `model.rs`、`extras.rs`、`app.rs` |
 | 通知历史 | `Ctrl+Alt+N` 面板：Windows 通知镜像、未读计数、复制/删除/清空，本机持久化 | `notifications.rs`、`notifications_ui.rs`、`native.rs` |
 | 防睡眠 | 设置与命令面板一键阻止系统休眠/息屏 | `system.rs`、`model.rs` |

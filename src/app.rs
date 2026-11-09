@@ -701,6 +701,8 @@ pub struct App {
     pub(crate) timer: TimerState,
     /// 天气页：最近一次成功数据、错误与加载状态。
     pub(crate) weather: WeatherState,
+    /// 天气页右侧卡片：`true` 显示多日预报，`false` 显示逐小时。
+    pub(crate) weather_days: bool,
     /// 通知历史：Windows 通知镜像，持久化到本机。
     pub(crate) notifications: crate::notifications::Store,
     /// 通知历史版本号；外壳据此判断是否需要刷新面板。
@@ -803,6 +805,7 @@ impl App {
             system: SystemPageState::default(),
             timer: TimerState::default(),
             weather: WeatherState::default(),
+            weather_days: false,
             notifications: crate::notifications::Store::load(),
             notifications_revision: 0,
         }
@@ -1296,6 +1299,12 @@ impl App {
         self.pending.push(Cmd::WeatherRefresh);
     }
 
+    /// 录制/截图用：切到多日预报视图。
+    #[cfg(feature = "record")]
+    pub fn weather_days_demo(&mut self) {
+        self.weather_days = true;
+    }
+
     /// 录制/截图用的天气样例数据。
     #[cfg(feature = "record")]
     pub fn weather_demo(&mut self) {
@@ -1323,13 +1332,20 @@ impl App {
             precip_chance: Some(10),
             updated_at: now,
             hourly: vec![
-                ("现在", 11.2, 2, Some(10)),
-                ("16时", 13.0, 2, Some(10)),
-                ("17时", 12.0, 3, Some(15)),
-                ("18时", 10.0, 3, Some(20)),
-                ("19时", 9.0, 61, Some(45)),
-                ("20时", 8.0, 61, Some(55)),
-            ].into_iter().map(|(label, temperature, code, precip_chance)| crate::weather::Hour { label: label.into(), temperature, code, precip_chance }).collect(),
+                ("现在", 11.2, 2, Some(10), true),
+                ("16时", 13.0, 2, Some(10), true),
+                ("17时", 12.0, 0, Some(0), false),
+                ("18时", 10.0, 2, Some(0), false),
+                ("19时", 9.0, 61, Some(45), false),
+                ("20时", 8.0, 61, Some(55), false),
+            ].into_iter().map(|(label, temperature, code, precip_chance, is_day)| crate::weather::Hour { label: label.into(), temperature, code, precip_chance, is_day }).collect(),
+            days: vec![
+                crate::weather::Day { label: "今天".into(), code: 2, high: Some(16.0), low: Some(3.0), precip_chance: Some(10) },
+                crate::weather::Day { label: "明天".into(), code: 61, high: Some(13.0), low: Some(5.0), precip_chance: Some(60) },
+                crate::weather::Day { label: "周四".into(), code: 3, high: Some(11.0), low: Some(4.0), precip_chance: Some(20) },
+            ],
+            sunrise: Some("06:52".into()),
+            sunset: Some("16:58".into()),
         });
         self.weather.error = None;
         self.weather.loading = false;

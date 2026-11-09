@@ -89,8 +89,16 @@ fn sample_weather() -> crate::weather::Weather {
             temperature,
             code,
             precip_chance,
+            is_day: true,
         })
         .collect(),
+        days: vec![
+            crate::weather::Day { label: "今天".into(), code: 2, high: Some(16.0), low: Some(3.0), precip_chance: Some(10) },
+            crate::weather::Day { label: "明天".into(), code: 61, high: Some(13.0), low: Some(5.0), precip_chance: Some(60) },
+            crate::weather::Day { label: "周四".into(), code: 3, high: Some(11.0), low: Some(4.0), precip_chance: Some(20) },
+        ],
+        sunrise: Some("06:52".into()),
+        sunset: Some("16:58".into()),
     }
 }
 
@@ -145,6 +153,12 @@ fn weather_page_shows_forecast_and_falls_back_gracefully() {
     for _ in 0..60 {h.frame(vec![]);}
     for expected in ["北京","多云 · 16° / 3°","湿度 46%","现在","19时","45%"] {
         assert!(contains(&h,expected),"天气页缺少 {expected}");
+    }
+    // 切到多日预报应显示今天/明天/周几与日出日落。
+    h.click(H::local(320.0,44.0));
+    for _ in 0..6 {h.frame(vec![]);}
+    for expected in ["今天","明天","周四","日出 06:52"] {
+        assert!(contains(&h,expected),"多日预报缺少 {expected}");
     }
     // 点击刷新区域应排一条刷新命令。
     h.cmds.clear();
