@@ -99,6 +99,7 @@ fn sample_weather() -> crate::weather::Weather {
         ],
         sunrise: Some("06:52".into()),
         sunset: Some("16:58".into()),
+        aqi: Some(crate::weather::Aqi { value: 42, pm2_5: Some(18.0), pm10: Some(31.0) }),
     }
 }
 
@@ -193,7 +194,7 @@ fn weather_page_shows_forecast_and_falls_back_gracefully() {
     h.app.show_page(10);
     h.hover(H::local(300.0,60.0),0.8);
     for _ in 0..60 {h.frame(vec![]);}
-    for expected in ["北京","多云 · 16° / 3°","湿度 46%","现在","19时","45%"] {
+    for expected in ["北京","多云 · 16° / 3°","湿度 46%","现在","19时","45%","空气 42 优"] {
         assert!(contains(&h,expected),"天气页缺少 {expected}");
     }
     // 切到多日预报应显示今天/明天/周几与日出日落。
@@ -204,6 +205,8 @@ fn weather_page_shows_forecast_and_falls_back_gracefully() {
     }
     // 点击刷新区域应排一条刷新命令。
     h.cmds.clear();
+    // 与切页点击拉开时间，避免被当成双击而吞掉 clicked。
+    h.t += 0.6;
     h.click(H::local(110.0,60.0));
     assert!(h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::WeatherRefresh)),"点击天气区域应触发刷新");
     // 有缓存时更新失败只提示，不清空数据。

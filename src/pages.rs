@@ -1020,13 +1020,38 @@ impl App {
             meta.push(format!("湿度 {humidity}%"));
         }
         if let Some(wind) = w.wind_kmh {
-            meta.push(format!("风 {:.0} km/h", wind));
+            meta.push(format!("风 {:.0}", wind));
+        }
+        let meta = meta.join(" · ");
+        if let Some(aqi) = w.aqi.as_ref() {
+            let color = aqi_color(aqi.level());
+            let aqi_text = format!("空气 {} {}", aqi.value, aqi.label());
+            c.circle(47.5, 119.5, 2.4, color);
+            c.text(52.0, 122.0, &aqi_text, 9.0, W::Semibold, color, H::Left);
+            let meta_x = 52.0 + c.text_w(&aqi_text, 9.0, W::Semibold) + 7.0;
+            c.text(
+                meta_x,
+                122.0,
+                &c.fit(&meta, 9.0, W::Regular, (202.0 - meta_x).max(20.0)),
+                9.0,
+                W::Regular,
+                Color32::from_gray(125),
+                H::Left,
+            );
+        } else {
+            c.text(44.0, 122.0, &c.fit(&meta, 9.0, W::Regular, 160.0), 9.0, W::Regular, Color32::from_gray(125), H::Left);
+        }
+        let mut refresh_hint = String::from("点击刷新天气");
+        if let Some(aqi) = w.aqi.as_ref() {
+            refresh_hint.push_str(&format!("\n空气 {} · {}", aqi.value, aqi.label()));
+            if let Some(pm) = aqi.pm2_5 {
+                refresh_hint.push_str(&format!("\nPM2.5 {pm:.0} μg/m³"));
+            }
         }
         if let Some(apparent) = w.apparent {
-            meta.push(format!("体感 {}°", apparent.round() as i32));
+            refresh_hint.push_str(&format!("\n体感 {}°", apparent.round() as i32));
         }
-        c.text(44.0, 122.0, &c.fit(&meta.join(" · "), 9.0, W::Regular, 160.0), 9.0, W::Regular, Color32::from_gray(125), H::Left);
-        if c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text("点击刷新天气").clicked() {
+        if c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text(refresh_hint).clicked() {
             self.request_weather_refresh();
         }
         if has_card {
@@ -1288,6 +1313,17 @@ impl App {
 }
 
 /// 天气图标：太阳/云/雨雪/雷暴共用简单的矢量形状，太阳光线随时间缓慢转动。
+fn aqi_color(level: u8) -> Color32 {
+    match level {
+        0 => Color32::from_rgb(74, 200, 120),
+        1 => Color32::from_rgb(190, 210, 80),
+        2 => Color32::from_rgb(240, 190, 70),
+        3 => Color32::from_rgb(240, 140, 70),
+        4 => Color32::from_rgb(230, 90, 80),
+        _ => Color32::from_rgb(190, 70, 130),
+    }
+}
+
 fn weather_glyph(c: &Card, cx: f32, cy: f32, size: f32, kind: crate::weather::Kind, is_day: bool, phase: f32, bg: Color32) {
     use crate::weather::Kind;
     let sun = theme::YELLOW;

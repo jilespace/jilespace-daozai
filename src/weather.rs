@@ -37,6 +37,32 @@ pub struct Hour {
     pub is_day: bool,
 }
 
+/// 空气质量：US AQI（0–500）与常见颗粒物，界面按等级着色。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Aqi {
+    pub value: u16,
+    pub pm2_5: Option<f32>,
+    pub pm10: Option<f32>,
+}
+
+impl Aqi {
+    /// 0 优、1 良、2 轻度、3 中度、4 重度、5 严重。
+    pub fn level(&self) -> u8 {
+        match self.value {
+            0..=50 => 0,
+            51..=100 => 1,
+            101..=150 => 2,
+            151..=200 => 3,
+            201..=300 => 4,
+            _ => 5,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        ["优", "良", "轻度污染", "中度污染", "重度污染", "严重污染"][self.level() as usize]
+    }
+}
+
 /// 多日预报的一行。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Day {
@@ -75,6 +101,8 @@ pub struct Weather {
     pub sunrise: Option<String>,
     #[serde(default)]
     pub sunset: Option<String>,
+    #[serde(default)]
+    pub aqi: Option<Aqi>,
 }
 
 
@@ -286,7 +314,31 @@ pub fn parse_forecast(
         days,
         sunrise,
         sunset,
+        aqi: None,
     })
+}
+
+/// 解析空气质量响应；缺少 AQI 时返回错误（调用方会静默忽略）。
+pub fn parse_air_quality(json: &str) -> Result<Aqi, String> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|_| "空气质量数据无法解析")?;
+    let current = &value["current"];
+    let aqi = current["us_aqi"]
+        .as_u64()
+        .or_else(|| current["european_aqi"].as_u64())
+        .ok_or("空气质量数据缺少 AQI")?;
+    Ok(Aqi {
+        value: aqi.min(1000) as u16,
+        pm2_5: f32_of(&current["pm2_5"]),
+        pm10: f32_of(&current["pm10"]),
+    })
+}
+
+fn fetch_air_quality(client: &ureq::Agent, latitude: f64, longitude: f64) -> Option<Aqi> {
+    let url = format!(
+        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude={latitude:.4}&longitude={longitude:.4}&current=us_aqi,pm2_5,pm10&timezone=auto"
+    );
+    let body = http_get(client, &url).ok()?;
+    parse_air_quality(&body).ok()
 }
 
 // ---------------------------------------------------------------- 服务
@@ -440,7 +492,8 @@ fn fetch(client: &ureq::Agent, city: &str, cache: Option<&Weather>, events: &Sen
     };
     *last_attempt = Local::now().timestamp();
     match parse_forecast(&body, city, latitude, longitude, Local::now()) {
-        Ok(weather) => {
+        Ok(mut weather) => {
+            weather.aqi = fetch_air_quality(client, latitude, longitude);
             save_cache(&weather);
             let _ = events.send(Event::Loaded(weather));
         }
@@ -469,6 +522,7 @@ mod tests {
     use chrono::TimeZone;
 
     const GEOCODE: &str = r#"{"results":[{"id":1816670,"name":"北京","latitude":39.9075,"longitude":116.39723,"country":"中国"}]}"#;
+    const AIR: &str = r#"{"current":{"time":"2026-11-10T04:00","us_aqi":42,"pm2_5":18.4,"pm10":31.0}}"#;
     const FORECAST: &str = r#"{"current":{"time":"2026-11-10T04:00","temperature_2m":0.4,"apparent_temperature":-2.6,"relative_humidity_2m":79,"weather_code":0,"is_day":0,"wind_speed_10m":3.0},"hourly":{"time":["2026-11-10T03:00","2026-11-10T04:00","2026-11-10T05:00","2026-11-10T06:00"],"temperature_2m":[-1.0,0.4,0.3,-1.0],"weather_code":[1,0,0,3],"precipitation_probability":[0,0,10,null],"is_day":[0,0,0,1]},"daily":{"time":["2026-11-10","2026-11-11","2026-11-12"],"weather_code":[0,61,3],"temperature_2m_max":[11.6,9.2,8.0],"temperature_2m_min":[0.1,1.4,0.0],"precipitation_probability_max":[15,70,20],"sunrise":["2026-11-10T06:52","2026-11-11T06:53","2026-11-12T06:54"],"sunset":["2026-11-10T16:58","2026-11-11T16:57","2026-11-12T16:56"]}}"#;
 
     fn now() -> chrono::DateTime<Local> {
@@ -514,6 +568,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_air_quality_and_maps_levels() {
+        let aqi = parse_air_quality(AIR).unwrap();
+        assert_eq!(aqi.value, 42);
+        assert_eq!(aqi.level(), 0);
+        assert_eq!(aqi.label(), "优");
+        assert!((aqi.pm2_5.unwrap() - 18.4).abs() < 1e-4);
+        for (value, level) in [(0u16, 0u8), (50, 0), (51, 1), (120, 2), (180, 3), (260, 4), (400, 5)] {
+            let aqi = Aqi { value, pm2_5: None, pm10: None };
+            assert_eq!(aqi.level(), level, "AQI {value} 等级错误");
+        }
+        assert!(parse_air_quality("{}").is_err());
+        assert!(parse_air_quality(r#"{"current":{"european_aqi":23}}"#).is_ok(), "缺少 US AQI 时可用欧洲 AQI 回退");
+    }
+
+    #[test]
     fn weather_codes_map_to_kinds_and_labels() {
         for code in [0u16, 1] {
             assert_eq!(kind(code), Kind::Sun);
@@ -552,6 +621,7 @@ mod tests {
         assert!(!name.is_empty());
         assert!(weather.temperature > -60.0 && weather.temperature < 60.0);
         assert!(!weather.hourly.is_empty(), "逐小时预报不应为空");
+        assert!(fetch_air_quality(&client, latitude, longitude).is_some(), "空气质量请求应成功");
     }
 
     #[test]

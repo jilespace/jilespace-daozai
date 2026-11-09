@@ -1396,6 +1396,7 @@ impl App {
             ],
             sunrise: Some("06:52".into()),
             sunset: Some("16:58".into()),
+            aqi: Some(crate::weather::Aqi { value: 42, pm2_5: Some(18.0), pm10: Some(31.0) }),
         });
         self.weather.error = None;
         self.weather.loading = false;
