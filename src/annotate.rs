@@ -16,6 +16,8 @@ pub enum Tool {
     Rect,
     Arrow,
     Text,
+    Mosaic,
+    Highlight,
 }
 
 impl Tool {
@@ -25,6 +27,8 @@ impl Tool {
             Self::Rect => "矩形",
             Self::Arrow => "箭头",
             Self::Text => "文字",
+            Self::Mosaic => "马赛克",
+            Self::Highlight => "高亮",
         }
     }
 }
@@ -33,6 +37,8 @@ pub const COLORS: [[u8; 3]; 5] = [[255, 69, 58], [255, 214, 10], [10, 132, 255],
 pub const WIDTHS: [f32; 3] = [3.0, 6.0, 11.0];
 /// 文字工具的字号（像素），与线宽档位共用三个位置。
 pub const TEXT_SIZES: [f32; 3] = [20.0, 30.0, 42.0];
+/// 马赛克的块大小（原始像素）。
+pub const MOSAIC_BLOCKS: [f32; 3] = [8.0, 14.0, 22.0];
 
 #[derive(Clone, Debug)]
 pub struct Shape {
@@ -130,9 +136,84 @@ pub fn rasterize(base: &Image, shapes: &[Shape]) -> Image {
                     }
                 }
             }
+            Tool::Mosaic => {
+                if let Some((start, end)) = ends(shape) {
+                    let (x0, y0) = (start.0.min(end.0), start.1.min(end.1));
+                    let (x1, y1) = (start.0.max(end.0), start.1.max(end.1));
+                    mosaic(&mut out, (x0, y0, x1, y1), shape.width);
+                }
+            }
+            Tool::Highlight => {
+                if let Some((start, end)) = ends(shape) {
+                    let (x0, y0) = (start.0.min(end.0), start.1.min(end.1));
+                    let (x1, y1) = (start.0.max(end.0), start.1.max(end.1));
+                    highlight(&mut out, (x0, y0, x1, y1), shape.color);
+                }
+            }
         }
     }
     out
+}
+
+fn rect_bounds(image: &Image, area: (f32, f32, f32, f32)) -> Option<(i32, i32, i32, i32)> {
+    let left = area.0.floor().max(0.0) as i32;
+    let top = area.1.floor().max(0.0) as i32;
+    let right = area.2.ceil().min(image.width as f32) as i32;
+    let bottom = area.3.ceil().min(image.height as f32) as i32;
+    (right > left && bottom > top).then_some((left, top, right, bottom))
+}
+
+/// 导出用马赛克：按块大小取区域平均色再填回，越界自动裁剪。
+fn mosaic(image: &mut Image, area: (f32, f32, f32, f32), block: f32) {
+    let Some((left, top, right, bottom)) = rect_bounds(image, area) else { return };
+    let block = block.max(4.0) as i32;
+    let mut y = top;
+    while y < bottom {
+        let mut x = left;
+        while x < right {
+            let x_end = (x + block).min(right);
+            let y_end = (y + block).min(bottom);
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            for py in y..y_end {
+                for px in x..x_end {
+                    let index = ((py as u32 * image.width + px as u32) * 4) as usize;
+                    for channel in 0..4 {
+                        sum[channel] += image.rgba[index + channel] as u32;
+                    }
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let color = [
+                    (sum[0] / count) as u8,
+                    (sum[1] / count) as u8,
+                    (sum[2] / count) as u8,
+                ];
+                for py in y..y_end {
+                    for px in x..x_end {
+                        let index = ((py as u32 * image.width + px as u32) * 4) as usize;
+                        image.rgba[index] = color[0];
+                        image.rgba[index + 1] = color[1];
+                        image.rgba[index + 2] = color[2];
+                        image.rgba[index + 3] = 255;
+                    }
+                }
+            }
+            x += block;
+        }
+        y += block;
+    }
+}
+
+/// 导出用高亮：半透明颜色叠加到矩形区域。
+fn highlight(image: &mut Image, area: (f32, f32, f32, f32), color: [u8; 3]) {
+    let Some((left, top, right, bottom)) = rect_bounds(image, area) else { return };
+    for y in top..bottom {
+        for x in left..right {
+            blend(image, x, y, color, 0.36);
+        }
+    }
 }
 
 /// 把一张带 alpha 的小图叠加到目标图左上角坐标处。
@@ -315,7 +396,7 @@ fn extend(shape: &mut Shape, point: (f32, f32)) {
                 shape.points.push(point);
             }
         }
-        Tool::Rect | Tool::Arrow => {
+        Tool::Rect | Tool::Arrow | Tool::Mosaic | Tool::Highlight => {
             if shape.points.len() < 2 {
                 shape.points.push(point);
             } else {
@@ -383,7 +464,7 @@ impl Editor {
     pub fn open(&mut self, ctx: &egui::Context, image: Image) {
         let (max_w, max_h) = MAX_CANVAS;
         let available_w = (max_w - 24.0).max(200.0);
-        let available_h = (max_h - 88.0).max(120.0);
+        let available_h = (max_h - 120.0).max(120.0);
         self.scale = (available_w / image.width as f32).min(available_h / image.height as f32).min(1.0);
         let _ = ctx;
         self.texture = None;
@@ -416,7 +497,7 @@ impl Editor {
             .as_ref()
             .map(|base| (base.width as f32 * self.scale, base.height as f32 * self.scale))
             .unwrap_or((300.0, 200.0));
-        Vec2::new((w + 24.0).max(MIN_WINDOW_W), h + 88.0)
+        Vec2::new((w + 24.0).max(MIN_WINDOW_W), h + 120.0)
     }
 
     pub fn show(&mut self, ctx: &egui::Context, dark: bool) -> Action {
@@ -511,7 +592,7 @@ impl Editor {
                     .inner_margin(12.0)
                     .shadow(crate::panel::shadow(dark))
                     .show(ui, |ui| {
-                        self.toolbar(ui, &palette, &mut action);
+                        self.toolbar(ui, &palette);
                         ui.add_space(6.0);
                         let canvas = self.canvas(ui);
                         if let Some(canvas) = canvas {
@@ -533,6 +614,25 @@ impl Editor {
                                 .color(palette.faint),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(egui::RichText::new("取消").size(11.0)).clicked() {
+                                    action = Action::Close;
+                                }
+                                if ui.button(egui::RichText::new("保存").size(11.0)).clicked() {
+                                    if let Some(base) = self.base.clone() {
+                                        action = Action::Save(rasterize(&base, &self.shapes));
+                                    }
+                                }
+                                if ui.button(egui::RichText::new("复制").size(11.0).strong()).clicked() {
+                                    if let Some(base) = self.base.clone() {
+                                        action = Action::Copy(rasterize(&base, &self.shapes));
+                                    }
+                                }
+                                if ui
+                                    .add_enabled(!self.shapes.is_empty(), egui::Button::new(egui::RichText::new("撤销").size(11.0)))
+                                    .clicked()
+                                {
+                                    self.shapes.pop();
+                                }
                                 ui.label(
                                     egui::RichText::new(format!("{} × {}", self.base.as_ref().map_or(0, |b| b.width), self.base.as_ref().map_or(0, |b| b.height)))
                                         .size(10.0)
@@ -545,11 +645,11 @@ impl Editor {
         action
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &crate::panel::Palette, action: &mut Action) {
+    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &crate::panel::Palette) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("截图标注").size(15.0).strong().color(palette.text));
             ui.add_space(6.0);
-            for tool in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text] {
+            for tool in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text, Tool::Mosaic, Tool::Highlight] {
                 let selected = self.tool == tool;
                 let response = ui.add(
                     egui::Button::new(
@@ -594,27 +694,7 @@ impl Editor {
                     self.width = index;
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(egui::RichText::new("取消").size(11.0)).clicked() {
-                    *action = Action::Close;
-                }
-                if ui.button(egui::RichText::new("保存").size(11.0)).clicked() {
-                    if let Some(base) = self.base.clone() {
-                        *action = Action::Save(rasterize(&base, &self.shapes));
-                    }
-                }
-                if ui.button(egui::RichText::new("复制").size(11.0).strong()).clicked() {
-                    if let Some(base) = self.base.clone() {
-                        *action = Action::Copy(rasterize(&base, &self.shapes));
-                    }
-                }
-                if ui
-                    .add_enabled(!self.shapes.is_empty(), egui::Button::new(egui::RichText::new("撤销").size(11.0)))
-                    .clicked()
-                {
-                    self.shapes.pop();
-                }
-            });
+
         });
     }
 
@@ -785,6 +865,51 @@ impl Editor {
                     );
                 }
             }
+            Tool::Highlight => {
+                if let (Some(start), Some(end)) = (shape.points.first(), shape.points.last()) {
+                    let rect = Rect::from_two_pos(map(*start), map(*end));
+                    ui.painter().rect_filled(
+                        rect,
+                        0.0,
+                        Color32::from_rgba_unmultiplied(shape.color[0], shape.color[1], shape.color[2], 92),
+                    );
+                }
+            }
+            Tool::Mosaic => {
+                if let (Some(start), Some(end)) = (shape.points.first(), shape.points.last()) {
+                    let rect = Rect::from_two_pos(map(*start), map(*end));
+                    let Some(base) = self.base.as_ref() else { return };
+                    let area = rect.width() * rect.height();
+                    let block = (shape.width * self.scale).max(3.0).max((area / 900.0).sqrt());
+                    let mut y = rect.top();
+                    while y < rect.bottom() {
+                        let mut x = rect.left();
+                        while x < rect.right() {
+                            let cell = Rect::from_min_max(
+                                egui::pos2(x, y),
+                                egui::pos2((x + block).min(rect.right()), (y + block).min(rect.bottom())),
+                            );
+                            let center = cell.center();
+                            let image_x = (((center.x - canvas.left()) / self.scale) as i32)
+                                .clamp(0, base.width as i32 - 1) as u32;
+                            let image_y = (((center.y - canvas.top()) / self.scale) as i32)
+                                .clamp(0, base.height as i32 - 1) as u32;
+                            let index = ((image_y * base.width + image_x) * 4) as usize;
+                            ui.painter().rect_filled(
+                                cell,
+                                0.0,
+                                Color32::from_rgb(
+                                    base.rgba[index],
+                                    base.rgba[index + 1],
+                                    base.rgba[index + 2],
+                                ),
+                            );
+                            x += block;
+                        }
+                        y += block;
+                    }
+                }
+            }
         }
     }
 }
@@ -875,6 +1000,48 @@ mod tests {
     }
 
     #[test]
+    fn mosaic_averages_blocks_and_clips_to_bounds() {
+        let mut base = image(32, 32);
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let index = ((y * 32 + x) * 4) as usize;
+                if x < 16 {
+                    base.rgba[index..index + 4].copy_from_slice(&[200, 0, 0, 255]);
+                } else {
+                    base.rgba[index..index + 4].copy_from_slice(&[0, 0, 200, 255]);
+                }
+            }
+        }
+        let shape = Shape {
+            tool: Tool::Mosaic,
+            color: [255, 255, 255],
+            width: 16.0,
+            points: vec![(-10.0, -10.0), (40.0, 40.0)],
+            text: None,
+        };
+        let out = rasterize(&base, &[shape]);
+        assert_eq!(pixel(&out, 4, 4), [200, 0, 0]);
+        assert_eq!(pixel(&out, 20, 20), [0, 0, 200]);
+        assert_eq!(out.rgba.len(), base.rgba.len());
+    }
+
+    #[test]
+    fn highlight_blends_color_only_inside_the_rect() {
+        let base = image(40, 30);
+        let shape = Shape {
+            tool: Tool::Highlight,
+            color: [255, 214, 10],
+            width: WIDTHS[1],
+            points: vec![(10.0, 8.0), (24.0, 20.0)],
+            text: None,
+        };
+        let out = rasterize(&base, &[shape]);
+        let inside = pixel(&out, 15, 12);
+        assert!(inside[0] > 80 && inside[1] > 60, "高亮区域内应混入黄色：{inside:?}");
+        assert_eq!(pixel(&out, 2, 2), [20, 20, 20]);
+    }
+
+    #[test]
     fn oversized_textures_are_downsampled_for_display_only() {
         let base = image(3840, 2160);
         let display = display_image(&base);
@@ -921,6 +1088,20 @@ mod tests {
             text: Some("岛仔截图".into()),
         });
         editor.shapes.push(Shape {
+            tool: Tool::Highlight,
+            color: [255, 214, 10],
+            width: WIDTHS[1],
+            points: vec![(250.0, 40.0), (430.0, 90.0)],
+            text: None,
+        });
+        editor.shapes.push(Shape {
+            tool: Tool::Mosaic,
+            color: [255, 255, 255],
+            width: MOSAIC_BLOCKS[1],
+            points: vec![(56.0, 196.0), (260.0, 300.0)],
+            text: None,
+        });
+        editor.shapes.push(Shape {
             tool: Tool::Rect,
             color: [10, 132, 255],
             width: 3.0,
@@ -956,7 +1137,7 @@ mod tests {
         for clipped in &output.shapes {
             collect(&clipped.shape, &mut texts);
         }
-        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "撤销", "复制", "保存"] {
+        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "马赛克", "高亮", "撤销", "复制", "保存"] {
             assert!(texts.iter().any(|text| text.galley.text().contains(expected)), "编辑器缺少 {expected}");
         }
         if let Some(dest) = std::env::var_os("DAOZAI_ANNOTATE_PREVIEW_DIR").filter(|value| !value.is_empty()) {
@@ -989,7 +1170,7 @@ mod tests {
         crate::theme::load_fonts(&ctx);
         editor.open(&ctx, image(3840, 2160));
         let size = editor.window_size();
-        assert!(size.x <= 900.0 && size.y <= 690.0, "窗口不应超出最大画布：{size:?}");
+        assert!(size.x <= 900.0 && size.y <= 720.0, "窗口不应超出最大画布：{size:?}");
         assert!(editor.scale < 0.5);
         assert!(editor.is_open());
         editor.close();
