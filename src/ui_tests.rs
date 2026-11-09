@@ -103,6 +103,48 @@ fn sample_weather() -> crate::weather::Weather {
 }
 
 #[test]
+fn do_not_disturb_keeps_history_but_suppresses_bell_and_banner() {
+    use chrono::Timelike;
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings.notifications=true;
+    h.app.settings.dnd_enabled=true;
+    let hour=chrono::Local::now().hour();
+    h.app.settings.dnd_start=hour;
+    h.app.settings.dnd_end=(hour+1)%24;
+    h.app.receive_notification("邮件".into(),"dnd-1".into(),"免打扰期间的消息".into());
+    h.frame(vec![]);
+    assert_eq!(h.app.notifications_snapshot().len(),1,"免打扰不影响历史记录");
+    assert_eq!(h.app.notification_bell_until,0.0,"免打扰不应亮铃铛");
+    assert!(h.app.alerts.is_empty(),"免打扰不应排队横幅");
+    assert!(h.app.notice.is_none());
+    // 关闭免打扰后恢复正常。
+    h.app.settings.dnd_enabled=false;
+    h.app.receive_notification("邮件".into(),"dnd-2".into(),"普通消息".into());
+    assert!(h.app.notification_bell_until>h.app.t);
+    assert_eq!(h.app.alerts.len(),1);
+}
+
+#[test]
+fn dnd_windows_wrap_midnight_and_clipboard_clean_setting_persists() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings.dnd_enabled=true;
+    h.app.settings.dnd_start=23;
+    h.app.settings.dnd_end=7;
+    for active in [23,0,3,6] {assert!(h.app.dnd_active(active),"跨午夜时段应包含 {active} 点");}
+    for quiet in [7,12,22] {assert!(!h.app.dnd_active(quiet),"时段外的 {quiet} 点不应免打扰");}
+    h.app.settings.dnd_start=9;h.app.settings.dnd_end=17;
+    assert!(h.app.dnd_active(10) && h.app.dnd_active(16) && !h.app.dnd_active(17));
+    h.app.settings.dnd_enabled=false;
+    assert!(!h.app.dnd_active(10));
+    h.app.settings.clipboard_clean_links=false;
+    h.app.settings.save();
+    assert!(!crate::model::Settings::load().clipboard_clean_links);
+    assert_eq!(crate::clipboard::clean_tracking("https://a.com/x?utm_source=q&id=7"), "https://a.com/x?id=7");
+}
+
+#[test]
 fn system_notifications_are_stored_and_mirrored_to_the_island() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();

@@ -58,7 +58,7 @@ struct Shell {
     quota_at: PollClock,
     clipboard: daozai::clipboard::Service,
     clipboard_popup: daozai::clipboard_ui::Popup,
-    clipboard_sig: (bool, usize, u32),
+    clipboard_sig: (bool, usize, u32, bool),
     #[cfg(windows)]
     clipboard_prev: Option<windows::Win32::Foundation::HWND>,
     clipboard_transfer: Option<(String, bool)>,
@@ -114,6 +114,7 @@ impl Shell {
             app.settings.clipboard_enabled && !app.settings.clipboard_paused;
         let clipboard_limit = app.settings.clipboard_limit as usize;
         let clipboard_days = app.settings.clipboard_days;
+        let clipboard_clean_links = app.settings.clipboard_clean_links;
         #[cfg(windows)]
         if app.settings.stay_awake {
             daozai::system::set_stay_awake(true);
@@ -123,6 +124,7 @@ impl Shell {
         let clipboard = daozai::clipboard::Service::start();
         clipboard.set_enabled(clipboard_enabled);
         clipboard.set_limits(clipboard_limit, clipboard_days);
+        clipboard.set_clean_links(app.settings.clipboard_clean_links);
         Self {
             app,
             t0: Instant::now(),
@@ -162,7 +164,7 @@ impl Shell {
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
             clipboard,
             clipboard_popup: daozai::clipboard_ui::Popup::default(),
-            clipboard_sig: (clipboard_enabled, clipboard_limit, clipboard_days),
+            clipboard_sig: (clipboard_enabled, clipboard_limit, clipboard_days, clipboard_clean_links),
             #[cfg(windows)]
             clipboard_prev: None,
             clipboard_transfer: None,
@@ -272,10 +274,12 @@ impl Shell {
             settings.clipboard_enabled && !settings.clipboard_paused,
             settings.clipboard_limit as usize,
             settings.clipboard_days,
+            settings.clipboard_clean_links,
         );
         if signature != self.clipboard_sig {
             self.clipboard.set_limits(signature.1, signature.2);
             self.clipboard.set_enabled(signature.0);
+            self.clipboard.set_clean_links(signature.3);
             self.clipboard_sig = signature;
         }
         while let Some(event) = self.clipboard.try_recv() {

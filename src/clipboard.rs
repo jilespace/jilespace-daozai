@@ -182,6 +182,68 @@ impl History {
     }
 }
 
+/// 去掉常见营销/分享跟踪参数；只处理「整段就是一条链接」的文本，其它内容原样返回。
+pub fn clean_tracking(text: &str) -> String {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        || trimmed.chars().any(char::is_whitespace)
+    {
+        return text.to_string();
+    }
+    let (before_fragment, fragment) = match trimmed.split_once('#') {
+        Some((before, fragment)) => (before, Some(fragment)),
+        None => (trimmed, None),
+    };
+    let Some((base, query)) = before_fragment.split_once('?') else {
+        return text.to_string();
+    };
+    let pairs: Vec<&str> = query.split('&').filter(|pair| !pair.is_empty()).collect();
+    let kept: Vec<&str> = pairs
+        .iter()
+        .copied()
+        .filter(|pair| !is_tracking_param(pair.split('=').next().unwrap_or("")))
+        .collect();
+    if kept.len() == pairs.len() {
+        return text.to_string();
+    }
+    let mut out = base.to_string();
+    if !kept.is_empty() {
+        out.push('?');
+        out.push_str(&kept.join("&"));
+    }
+    if let Some(fragment) = fragment {
+        out.push('#');
+        out.push_str(fragment);
+    }
+    out
+}
+
+fn is_tracking_param(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.starts_with("utm_")
+        || key.starts_with("share_")
+        || matches!(
+            key.as_str(),
+            "fbclid"
+                | "gclid"
+                | "dclid"
+                | "msclkid"
+                | "yclid"
+                | "igshid"
+                | "mc_cid"
+                | "mc_eid"
+                | "_hsenc"
+                | "_hsmi"
+                | "spm"
+                | "scm"
+                | "si"
+                | "vero_id"
+                | "oly_enc_id"
+                | "oly_anon_id"
+                | "wk_via"
+        )
+}
+
 pub fn id_for(text: &str) -> String {
     use std::fmt::Write;
     let digest = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
@@ -493,6 +555,7 @@ pub enum Cmd {
     Pin(String, bool),
     /// 外部识别/生成的结果直接插入历史（不写系统剪贴板）。
     Insert(String),
+    SetCleanLinks(bool),
     Clear,
     Refresh,
 }
@@ -567,6 +630,10 @@ impl Service {
         let _ = self.cmd.send(Cmd::SetLimits(limit, days));
     }
 
+    pub fn set_clean_links(&self, clean: bool) {
+        let _ = self.cmd.send(Cmd::SetCleanLinks(clean));
+    }
+
     pub fn copy(&self, id: &str) {
         let _ = self.cmd.send(Cmd::Copy(id.into()));
     }
@@ -618,6 +685,7 @@ fn supervisor(
         history.items().to_vec(),
     )));
     let mut enabled = false;
+    let mut clean_links = true;
     let mut last_sequence = capture.sequence();
     let mut last_poll = Instant::now();
     let mut last_prune = Instant::now();
@@ -630,6 +698,9 @@ fn supervisor(
                     // 开启时不要把当前剪贴板里的旧内容当成新复制。
                     last_sequence = capture.sequence();
                 }
+            }
+            Ok(Cmd::SetCleanLinks(clean)) => {
+                clean_links = clean;
             }
             Ok(Cmd::SetLimits(limit, days)) => {
                 history.set_limits(limit, days, now_seconds());
@@ -719,7 +790,10 @@ fn supervisor(
             let sequence = capture.sequence();
             if sequence != last_sequence {
                 last_sequence = sequence;
-                if let Some(text) = capture.read() {
+                if let Some(mut text) = capture.read() {
+                    if clean_links {
+                        text = clean_tracking(&text);
+                    }
                     let raw = RawClipboard {
                         text,
                         excluded: false,
@@ -755,6 +829,21 @@ mod tests {
 
     fn find<'a>(history: &'a History, text: &str) -> Option<&'a Item> {
         history.items().iter().find(|item| item.text == text)
+    }
+
+    #[test]
+    fn clean_tracking_strips_marketing_parameters() {
+        assert_eq!(
+            clean_tracking("https://example.com/a?utm_source=x&id=42&fbclid=abc#top"),
+            "https://example.com/a?id=42#top"
+        );
+        // 全部都是跟踪参数时连问号一起去掉。
+        assert_eq!(clean_tracking("https://example.com?utm_medium=mail&spm=a1"), "https://example.com");
+        // 不是链接、或链接里带空格时保持原样。
+        let plain = "https://example.com/a?utm_source=x 这里有空格";
+        assert_eq!(clean_tracking(plain), plain);
+        assert_eq!(clean_tracking("普通文本 utm_source=x"), "普通文本 utm_source=x");
+        assert_eq!(clean_tracking("https://example.com/a?id=1"), "https://example.com/a?id=1");
     }
 
     #[test]

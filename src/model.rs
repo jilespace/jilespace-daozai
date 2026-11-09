@@ -161,6 +161,12 @@ pub struct Settings {
     pub clipboard_paused: bool,
     pub clipboard_limit: u32,
     pub clipboard_days: u32,
+    /// 复制链接时自动清理跟踪参数。
+    pub clipboard_clean_links: bool,
+    /// 免打扰时段：只记录通知，不弹横幅与铃铛。
+    pub dnd_enabled: bool,
+    pub dnd_start: u32,
+    pub dnd_end: u32,
     /// 防睡眠：阻止系统休眠与息屏。
     pub stay_awake: bool,
     /// 音频可视化：用系统回环绘制真实频谱，默认关闭以避免无谓占用。
@@ -174,7 +180,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false], page_order: [0,1,2,3,4,5,6,7,8,9,10], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false], page_order: [0,1,2,3,4,5,6,7,8,9,10], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, clipboard_clean_links: true, dnd_enabled: false, dnd_start: 23, dnd_end: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
     }
 }
 
@@ -240,6 +246,10 @@ impl Settings {
                 "clipboard_days" => {
                     s.clipboard_days = v.parse::<u32>().unwrap_or(7).clamp(1, 30)
                 }
+                "clipboard_clean_links" => s.clipboard_clean_links = v != "0",
+                "dnd_enabled" => s.dnd_enabled = v != "0",
+                "dnd_start" => s.dnd_start = v.parse::<u32>().unwrap_or(23).min(23),
+                "dnd_end" => s.dnd_end = v.parse::<u32>().unwrap_or(7).min(23),
                 "stay_awake" => s.stay_awake = v == "1",
                 "audio_visualizer" => s.audio_visualizer = v == "1",
                 "weather_enabled" => { s.weather_enabled = v == "1"; weather_key_seen = true; }
@@ -294,6 +304,10 @@ impl Settings {
                 ("clipboard_paused".into(), (self.clipboard_paused as u8).to_string()),
                 ("clipboard_limit".into(), self.clipboard_limit.to_string()),
                 ("clipboard_days".into(), self.clipboard_days.to_string()),
+                ("clipboard_clean_links".into(), (self.clipboard_clean_links as u8).to_string()),
+                ("dnd_enabled".into(), (self.dnd_enabled as u8).to_string()),
+                ("dnd_start".into(), self.dnd_start.to_string()),
+                ("dnd_end".into(), self.dnd_end.to_string()),
                 ("stay_awake".into(), (self.stay_awake as u8).to_string()),
                 ("audio_visualizer".into(), (self.audio_visualizer as u8).to_string()),
                 ("weather_enabled".into(), (self.weather_enabled as u8).to_string()),

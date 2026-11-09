@@ -1283,6 +1283,28 @@ impl App {
         self.pending.push(Cmd::OpenNotifications);
     }
 
+    /// 当前小时是否处于免打扰时段；结束时间小于开始时间时按跨午夜处理。
+    pub(crate) fn dnd_active(&self, hour: u32) -> bool {
+        if !self.settings.dnd_enabled {
+            return false;
+        }
+        let start = self.settings.dnd_start.min(23);
+        let end = self.settings.dnd_end.min(23);
+        if start == end {
+            return false;
+        }
+        if start < end {
+            hour >= start && hour < end
+        } else {
+            hour >= start || hour < end
+        }
+    }
+
+    pub(crate) fn dnd_active_now(&self) -> bool {
+        use chrono::Timelike;
+        self.dnd_active(chrono::Local::now().hour())
+    }
+
     /// 后台线程送来的音频频谱；只在设置开启时使用。
     pub fn audio_spectrum(&mut self, spectrum: crate::audio::Spectrum) {
         self.spectrum = spectrum;

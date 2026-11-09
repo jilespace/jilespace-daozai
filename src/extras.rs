@@ -235,7 +235,7 @@ impl App {
         if self.notifications.push(app.clone(),id.clone(),body.clone()) {
             self.notifications_revision=self.notifications_revision.wrapping_add(1);
         }
-        if !self.settings.notifications {return;}
+        if !self.settings.notifications || self.dnd_active_now() {return;}
         self.notification_bell_at=self.t;
         self.notification_bell_until=self.t+6.0;
         // 用岛内横幅镜像 Windows 通知；点击「查看」打开通知历史。
@@ -802,6 +802,13 @@ impl App {
                 "暂停记录",
                 "临时停止记录，适合处理敏感信息时使用",
                 &mut self.settings.clipboard_paused,
+            );
+            ui.separator();
+            setting_row(
+                ui,
+                "清理链接跟踪参数",
+                "复制单条链接时去掉 utm_*、fbclid、spm 等营销参数",
+                &mut self.settings.clipboard_clean_links,
             );
             ui.separator();
             ui.horizontal(|ui| {
@@ -1417,6 +1424,16 @@ impl App {
                             setting_row(ui,"系统状态","音量、充电、网络和键盘状态",&mut self.settings.system_hud);
                             ui.separator();
                             setting_row(ui,"岛仔提醒","在岛上显示饮水、专注和待办提醒",&mut self.settings.notifications);
+                        });
+                        settings_label(ui,"免打扰");
+                        settings_card(ui,|ui|{
+                            setting_row(ui,"免打扰时段","该时段内通知只进历史，不弹岛上横幅与铃铛",&mut self.settings.dnd_enabled);
+                            ui.separator();
+                            setting_number(ui,"开始时间",&mut self.settings.dnd_start,0,23," 点",1.0);
+                            ui.separator();
+                            setting_number(ui,"结束时间",&mut self.settings.dnd_end,0,23," 点",1.0);
+                            ui.add_space(3.0);
+                            ui.label(egui::RichText::new("跨午夜时段自动识别（例如 23 点到 7 点）；通知面板仍会完整记录。").size(11.0).color(settings_color(&ctx,Color32::from_gray(175),Color32::from_gray(95))));
                         });
                         settings_label(ui,"应用通知");
                         settings_card(ui,|ui|{
