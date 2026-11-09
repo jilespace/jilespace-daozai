@@ -38,6 +38,7 @@ cargo run --locked --bin daozai
 | `src/notifications.rs`、`src/notifications_ui.rs` | 通知历史存储与通知面板 |
 | `src/ocr.rs` | 剪贴板图片读取、DIB 解析与 Windows 本地 OCR |
 | `src/region_capture.rs`、`src/capture_ui.rs` | 屏幕截取、框选遮罩与选区换算 |
+| `src/screenshot.rs` | 截图 DIB/PNG 编码、剪贴板写入与保存 |
 | `src/native.rs`、`src/system.rs` | 原生窗口、输入、拖放和系统事件 |
 | `src/ui_tests.rs` | 无窗口交互与布局回归测试 |
 | `src/bin/daozai-record` | 合成数据演示与软件渲染器 |

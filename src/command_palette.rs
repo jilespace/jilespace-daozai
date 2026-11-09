@@ -50,6 +50,7 @@ pub enum Action {
     SetStayAwake(bool),
     RefreshWeather,
     OpenNotifications,
+    ScreenshotRegion,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -371,6 +372,14 @@ impl Panel {
                 Action::RefreshWeather,
             ));
         }
+        entries.push(action(
+            "action-screenshot",
+            "截屏保存…",
+            "框选屏幕区域，复制图片并保存到图片目录",
+            "截屏 截图 保存 screenshot capture save",
+            Glyph::Gear,
+            Action::ScreenshotRegion,
+        ));
         entries.push(action(
             "action-notifications",
             "通知历史",
@@ -1868,6 +1877,15 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn screenshot_action_is_searchable() {
+        let palette = palette_for_test("截屏");
+        assert!(
+            palette.results.iter().any(|entry| entry.action == Action::ScreenshotRegion),
+            "应能搜索到截屏保存"
+        );
+    }
+
     #[test]
     fn notification_history_action_is_searchable() {
         let palette = palette_for_test("通知");

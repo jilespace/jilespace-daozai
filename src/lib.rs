@@ -7,6 +7,7 @@
 
 pub mod poll_clock;
 pub mod region_capture;
+pub mod screenshot;
 pub mod anim;
 pub mod app;
 pub mod audio;

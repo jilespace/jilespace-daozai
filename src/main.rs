@@ -67,6 +67,7 @@ struct Shell {
     ocr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 框选取字：整屏位图、目标显示器与全屏遮罩。
     capture_overlay: daozai::capture_ui::Overlay,
+    capture_purpose: daozai::capture_ui::Purpose,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -171,6 +172,7 @@ impl Shell {
             clipboard_status: String::new(),
             ocr_rx: None,
             capture_overlay: Default::default(),
+            capture_purpose: Default::default(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -196,6 +198,7 @@ impl Shell {
                 Event::OcrClipboard=>self.run_ocr(ctx),
                 Event::CropOcr=>self.start_region_ocr(ctx),
                 Event::OpenNotifications=>self.open_notifications(ctx),
+                Event::Screenshot=>self.start_region_screenshot(ctx),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -467,19 +470,31 @@ impl Shell {
 
     /// 打开框选取字层：先抓整屏位图，再让用户框选，避免遮罩被拍进图片。
     fn start_region_ocr(&mut self, ctx: &egui::Context) {
+        self.start_region_capture(ctx, daozai::capture_ui::Purpose::Ocr);
+    }
+
+    /// 打开框选截图层：框选后复制到剪贴板并保存 PNG。
+    fn start_region_screenshot(&mut self, ctx: &egui::Context) {
+        self.start_region_capture(ctx, daozai::capture_ui::Purpose::Screenshot);
+    }
+
+    fn start_region_capture(&mut self, ctx: &egui::Context, purpose: daozai::capture_ui::Purpose) {
         if self.capture_overlay.open {
             return;
         }
-        if self.ocr_rx.is_some() {
+        if purpose == daozai::capture_ui::Purpose::Ocr && self.ocr_rx.is_some() {
             self.app.say("正在识别上一张图片，请稍候");
             return;
         }
-        // 框选层全屏覆盖，先收起其它浮层，避免识别后还挡着屏幕。
+        // 框选层全屏覆盖，先收起其它浮层，避免遮挡屏幕。
         if self.clipboard_popup.open {
             self.close_clipboard(false);
         }
         if self.command_palette.is_open() {
             self.command_palette.close();
+        }
+        if self.notifications_popup.is_open() {
+            self.close_notifications();
         }
         let Some(monitor) = daozai::region_capture::monitor_at_cursor() else {
             self.app.say("没有找到可用显示器");
@@ -489,7 +504,8 @@ impl Shell {
             Ok(image) => {
                 self.capture_image = Some(image);
                 self.capture_monitor = Some(monitor);
-                self.capture_overlay.open(monitor);
+                self.capture_purpose = purpose;
+                self.capture_overlay.open(monitor, purpose);
                 ctx.request_repaint();
             }
             Err(error) => self.app.say(format!("无法截取屏幕：{error}")),
@@ -507,18 +523,33 @@ impl Shell {
             CaptureAction::Cancel => self.close_capture_overlay(),
             CaptureAction::Capture { x, y, width, height } => {
                 self.capture_overlay.close();
+                let purpose = self.capture_purpose;
                 let Some(image) = self.capture_image.take() else {
                     self.capture_monitor = None;
                     return;
                 };
                 self.capture_monitor = None;
                 match daozai::region_capture::crop(&image, x, y, width, height) {
-                    Ok(cropped) => self.start_ocr_image(ctx, cropped),
+                    Ok(cropped) => match purpose {
+                        daozai::capture_ui::Purpose::Ocr => self.start_ocr_image(ctx, cropped),
+                        daozai::capture_ui::Purpose::Screenshot => self.finish_screenshot(cropped),
+                    },
                     Err(error) => self.app.say(error),
                 }
             }
         }
     }
+
+    /// 截图完成：复制到剪贴板并保存 PNG，两个步骤分别报状态。
+    fn finish_screenshot(&mut self, image: daozai::ocr::Image) {
+        #[cfg(windows)]
+        daozai::screenshot::copy_to_clipboard(&image);
+        match daozai::screenshot::save_png(&image) {
+            Ok(path) => self.app.say(format!("截图已复制并保存到 {}", path.display())),
+            Err(error) => self.app.say(format!("已复制截图，但保存失败：{error}")),
+        }
+    }
+
 
     fn close_capture_overlay(&mut self) {
         self.capture_overlay.close();
@@ -698,6 +729,10 @@ impl Shell {
                 self.close_command_palette();
                 self.open_notifications(ctx);
             }
+            PaletteAction::ScreenshotRegion => {
+                self.close_command_palette();
+                self.start_region_screenshot(ctx);
+            }
             PaletteAction::SetStayAwake(awake) => {
                 self.close_command_palette();
                 self.app.settings.stay_awake = awake;
@@ -778,11 +813,14 @@ impl eframe::App for Shell {
         {
             // 一次只消费一次热键；框选层打开期间不再响应其他浮层热键。
             let screen_ocr = daozai::native::take_crop_hotkey();
+            let screen_shot = daozai::native::take_screenshot_hotkey();
             let clipboard_hotkey = daozai::native::take_clipboard_hotkey();
             let command_hotkey = daozai::native::take_command_hotkey();
             let image_ocr = daozai::native::take_ocr_hotkey();
             let notification_hotkey = daozai::native::take_notification_hotkey();
-            if screen_ocr {
+            if screen_shot {
+                self.start_region_screenshot(ctx);
+            } else if screen_ocr {
                 self.start_region_ocr(ctx);
             } else if !self.capture_overlay.open {
                 if clipboard_hotkey {

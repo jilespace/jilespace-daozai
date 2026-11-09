@@ -19,8 +19,25 @@ pub enum Action {
     Capture { x: i32, y: i32, width: u32, height: u32 },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Purpose {
+    #[default]
+    Ocr,
+    Screenshot,
+}
+
+impl Purpose {
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Ocr => "拖动框选文字区域，松开后识别",
+            Self::Screenshot => "拖动框选截图区域，松开后复制并保存",
+        }
+    }
+}
+
 pub struct Overlay {
     pub open: bool,
+    purposes: Purpose,
     monitor: MonitorRect,
     start: Option<Pos2>,
     current: Option<Pos2>,
@@ -35,6 +52,7 @@ impl Default for Overlay {
     fn default() -> Self {
         Self {
             open: false,
+            purposes: Purpose::Ocr,
             monitor: MonitorRect { x: 0, y: 0, width: 1, height: 1 },
             start: None,
             current: None,
@@ -48,8 +66,9 @@ impl Default for Overlay {
 }
 
 impl Overlay {
-    pub fn open(&mut self, monitor: MonitorRect) {
+    pub fn open(&mut self, monitor: MonitorRect, purpose: Purpose) {
         self.open = true;
+        self.purposes = purpose;
         self.monitor = monitor;
         self.start = None;
         self.current = None;
@@ -305,7 +324,7 @@ impl Overlay {
 
     fn draw_hint(&self, painter: &egui::Painter, screen: Rect, fade: f32) {
         let hint = painter.layout_no_wrap(
-            "拖动框选文字区域，松开后识别".to_owned(),
+            self.purposes.hint().to_owned(),
             theme::font(11.5, W::Semibold),
             Color32::WHITE,
         );
@@ -356,7 +375,7 @@ mod tests {
 
     fn new_overlay() -> Overlay {
         let mut overlay = Overlay::default();
-        overlay.open(monitor());
+        overlay.open(monitor(), Purpose::Ocr);
         overlay.fade = 1.0;
         overlay
     }
@@ -507,5 +526,44 @@ mod tests {
         assert!(texts.iter().any(|text| text.galley.text().contains("拖动框选文字区域")));
         assert!(texts.iter().any(|text| text.galley.text().contains("Esc 取消")));
         assert!(texts.iter().any(|text| text.galley.text().contains("320 × 160")));
+    }
+
+    #[test]
+    fn screenshot_purpose_shows_save_hint() {
+        let ctx = context();
+        let mut overlay = new_overlay();
+        overlay.purposes = Purpose::Screenshot;
+        overlay.start = Some(Pos2::new(120.0, 140.0));
+        overlay.current = Some(Pos2::new(440.0, 300.0));
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 500.0))),
+            time: Some(0.0),
+            focused: true,
+            viewports: std::iter::once((
+                egui::ViewportId::ROOT,
+                egui::ViewportInfo { native_pixels_per_point: Some(1.0), ..Default::default() },
+            ))
+            .collect(),
+            ..Default::default()
+        };
+        let output = ctx.run(raw, |ctx| {
+            overlay.panel_ui(ctx);
+        });
+        fn collect<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text),
+                egui::Shape::Vec(items) => {
+                    for item in items {
+                        collect(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut texts);
+        }
+        assert!(texts.iter().any(|text| text.galley.text().contains("拖动框选截图区域，松开后复制并保存")));
     }
 }
