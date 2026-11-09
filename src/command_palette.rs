@@ -53,6 +53,7 @@ pub enum Action {
     ScreenshotRegion,
     CopyClipboard(String),
     ClosePins,
+    ScrollCapture,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -417,6 +418,14 @@ impl Panel {
                 Action::ClosePins,
             ));
         }
+        entries.push(action(
+            "action-scroll-capture",
+            "滚动截图…",
+            "框选区域后滚动页面，自动拼接成长图",
+            "滚动截图 长截图 scroll capture long screenshot",
+            Glyph::Gear,
+            Action::ScrollCapture,
+        ));
         entries.push(action(
             "action-screenshot",
             "截屏保存…",

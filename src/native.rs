@@ -43,6 +43,9 @@ static OCR_HOTKEY: AtomicBool = AtomicBool::new(false);
 /// 全局框选取字热键。
 const CROP_HOTKEY_ID: i32 = 0xDA0D;
 static CROP_HOTKEY: AtomicBool = AtomicBool::new(false);
+/// 全局滚动截图热键。
+const SCROLL_HOTKEY_ID: i32 = 0xDA10;
+static SCROLL_HOTKEY: AtomicBool = AtomicBool::new(false);
 /// 全局截图热键。
 const SCREENSHOT_HOTKEY_ID: i32 = 0xDA0F;
 static SCREENSHOT_HOTKEY: AtomicBool = AtomicBool::new(false);
@@ -117,6 +120,10 @@ unsafe extern "system" fn subclass(
     }
     if msg == WM_HOTKEY && wp.0 as i32 == SCREENSHOT_HOTKEY_ID {
         SCREENSHOT_HOTKEY.store(true, Ordering::Relaxed);
+        return LRESULT(0);
+    }
+    if msg == WM_HOTKEY && wp.0 as i32 == SCROLL_HOTKEY_ID {
+        SCROLL_HOTKEY.store(true, Ordering::Relaxed);
         return LRESULT(0);
     }
     if msg == WM_HOTKEY && wp.0 as i32 == NOTIFICATION_HOTKEY_ID {
@@ -294,6 +301,37 @@ pub(crate) fn test_crop_hotkey_press() {
     CROP_HOTKEY.store(true, Ordering::Relaxed);
 }
 
+pub fn register_scroll_hotkey(hwnd: HWND) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
+    };
+    unsafe {
+        RegisterHotKey(
+            hwnd,
+            SCROLL_HOTKEY_ID,
+            HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_ALT.0 | MOD_SHIFT.0 | MOD_NOREPEAT.0),
+            'L' as u32,
+        )
+        .map_err(|_| "全局热键 Ctrl+Alt+Shift+L 被其他程序占用".to_string())
+    }
+}
+
+pub fn unregister_scroll_hotkey(hwnd: HWND) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
+    unsafe {
+        let _ = UnregisterHotKey(hwnd, SCROLL_HOTKEY_ID);
+    }
+}
+
+pub fn take_scroll_hotkey() -> bool {
+    SCROLL_HOTKEY.swap(false, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn test_scroll_hotkey_press() {
+    SCROLL_HOTKEY.store(true, Ordering::Relaxed);
+}
+
 pub fn register_screenshot_hotkey(hwnd: HWND) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
@@ -354,6 +392,21 @@ pub fn take_notification_hotkey() -> bool {
 #[cfg(test)]
 pub(crate) fn test_notification_hotkey_press() {
     NOTIFICATION_HOTKEY.store(true, Ordering::Relaxed);
+}
+
+/// 让指定标题的窗口不出现在屏幕捕获中（Windows 10 2004+）；失败时返回 false。
+pub fn exclude_from_capture(title: &str) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        match FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) {
+            Ok(hwnd) if !hwnd.0.is_null() => SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).is_ok(),
+            _ => false,
+        }
+    }
 }
 
 pub fn foreground_window() -> Option<HWND> {
@@ -584,6 +637,7 @@ pub struct Window {
     pub crop_hotkey_error: Option<String>,
     pub notification_hotkey_error: Option<String>,
     pub screenshot_hotkey_error: Option<String>,
+    pub scroll_hotkey_error: Option<String>,
 }
 
 impl Window {
@@ -609,7 +663,8 @@ impl Window {
         let crop_hotkey_error = register_crop_hotkey(hwnd).err();
         let notification_hotkey_error = register_notification_hotkey(hwnd).err();
         let screenshot_hotkey_error = register_screenshot_hotkey(hwnd).err();
-        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error, command_hotkey_error, ocr_hotkey_error, crop_hotkey_error, notification_hotkey_error, screenshot_hotkey_error })
+        let scroll_hotkey_error = register_scroll_hotkey(hwnd).err();
+        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error, command_hotkey_error, ocr_hotkey_error, crop_hotkey_error, notification_hotkey_error, screenshot_hotkey_error, scroll_hotkey_error })
     }
 
     pub fn browser_at_top(&mut self)->Option<bool> {
@@ -672,6 +727,7 @@ impl Drop for Window {
         unregister_crop_hotkey(self.hwnd);
         unregister_notification_hotkey(self.hwnd);
         unregister_screenshot_hotkey(self.hwnd);
+        unregister_scroll_hotkey(self.hwnd);
         unsafe {
             let _ = RemoveWindowSubclass(self.hwnd, Some(subclass), SUBCLASS_ID);
             if !self.hook.is_invalid() {
@@ -779,7 +835,7 @@ mod tests {
             assert!(above(cover.0,island.0),"先复现其他窗口盖住岛体");
             let foreground=GetForegroundWindow();
             let saved=hit().lock().unwrap_or_else(|e|e.into_inner()).clone();
-            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None,command_hotkey_error:None,ocr_hotkey_error:None,crop_hotkey_error:None,notification_hotkey_error:None,screenshot_hotkey_error:None};
+            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None,command_hotkey_error:None,ocr_hotkey_error:None,crop_hotkey_error:None,notification_hotkey_error:None,screenshot_hotkey_error:None,scroll_hotkey_error:None};
             let update=|native:&mut Window,expanded|native.update((0.0,0.0,416.0,140.0),(0.0,0.0,416.0,140.0),None,None,1.0,false,expanded);
             update(&mut native,true);
             assert!(above(island.0,cover.0),"展开时必须重新抬高实际窗口层级，不能只检查置顶标记");
@@ -924,6 +980,13 @@ mod tests {
         test_notification_hotkey_press();
         assert!(take_notification_hotkey());
         assert!(!take_notification_hotkey());
+    }
+
+    #[test]
+    fn scroll_hotkey_flag_is_consumed_once() {
+        test_scroll_hotkey_press();
+        assert!(take_scroll_hotkey());
+        assert!(!take_scroll_hotkey());
     }
 
     #[test]

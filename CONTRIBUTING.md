@@ -40,6 +40,7 @@ cargo run --locked --bin daozai
 | `src/ocr.rs` | 剪贴板图片读取、DIB 解析与 Windows 本地 OCR |
 | `src/region_capture.rs`、`src/capture_ui.rs` | 屏幕截取、框选遮罩与选区换算 |
 | `src/screenshot.rs` | 截图 DIB/PNG 编码、剪贴板写入与保存 |
+| `src/scroll_capture.rs` | 滚动截图：重叠拼接、采集循环与 HUD |
 | `src/annotate.rs` | 截图标注编辑器、文字/形状/马赛克合成与导出 |
 | `src/pin.rs` | 桌面贴图窗口（置顶、拖动、关闭） |
 | `src/native.rs`、`src/system.rs` | 原生窗口、输入、拖放和系统事件 |

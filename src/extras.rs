@@ -1330,6 +1330,7 @@ impl App {
                                 ("识别图片文字","读取剪贴板里的图片，用 Windows 本地 OCR 识别",crate::ocr::HOTKEY_TEXT),
                                 ("截屏框选取字","框选屏幕区域后本地 OCR 识别","Ctrl+Alt+Shift+O"),
                                 ("截屏保存","框选后复制图片并保存到「图片\\岛仔截图」","Ctrl+Alt+Shift+S"),
+                                ("滚动截图","框选区域后滚动页面，自动拼接成长图","Ctrl+Alt+Shift+L"),
                             ] {
                                 ui.horizontal(|ui|{
                                     ui.vertical(|ui|{

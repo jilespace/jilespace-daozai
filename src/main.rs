@@ -74,6 +74,8 @@ struct Shell {
     capture_purpose: daozai::capture_ui::Purpose,
     /// 截图标注编辑器。
     annotate: daozai::annotate::Editor,
+    /// 滚动截图的采集与 HUD。
+    scroll_capture: Option<daozai::scroll_capture::Capture>,
     /// 贴在桌面上的截图（置顶小窗）。
     pins: Vec<daozai::pin::Pin>,
     /// 通知历史面板与数据版本。
@@ -184,6 +186,7 @@ impl Shell {
             capture_overlay: Default::default(),
             capture_purpose: Default::default(),
             annotate: Default::default(),
+            scroll_capture: None,
             pins: Vec::new(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
@@ -211,6 +214,7 @@ impl Shell {
                 Event::CropOcr=>self.start_region_ocr(ctx),
                 Event::OpenNotifications=>self.open_notifications(ctx),
                 Event::Screenshot=>self.start_region_screenshot(ctx),
+                Event::ScrollCapture=>self.start_region_scroll(ctx),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -512,6 +516,10 @@ impl Shell {
     }
 
     fn start_region_capture(&mut self, ctx: &egui::Context, purpose: daozai::capture_ui::Purpose) {
+        if self.scroll_capture.is_some() {
+            self.app.say("正在滚动截图，先按 Ctrl+Alt+Shift+L 完成");
+            return;
+        }
         self.annotate.close();
         if self.capture_overlay.open {
             return;
@@ -558,15 +566,19 @@ impl Shell {
             CaptureAction::Capture { x, y, width, height } => {
                 self.capture_overlay.close();
                 let purpose = self.capture_purpose;
+                let monitor = self.capture_monitor.take();
                 let Some(image) = self.capture_image.take() else {
-                    self.capture_monitor = None;
                     return;
                 };
-                self.capture_monitor = None;
                 match daozai::region_capture::crop(&image, x, y, width, height) {
                     Ok(cropped) => match purpose {
                         daozai::capture_ui::Purpose::Ocr => self.start_ocr_image(ctx, cropped),
                         daozai::capture_ui::Purpose::Screenshot => self.finish_screenshot(ctx, cropped),
+                        daozai::capture_ui::Purpose::Scroll => {
+                            if let Some(monitor) = monitor {
+                                self.start_scroll_capture(ctx, monitor, (x, y, width, height), cropped);
+                            }
+                        }
                     },
                     Err(error) => self.app.say(error),
                 }
@@ -578,6 +590,53 @@ impl Shell {
     fn finish_screenshot(&mut self, ctx: &egui::Context, image: daozai::ocr::Image) {
         self.annotate.open(ctx, image);
         ctx.request_repaint();
+    }
+
+    fn start_region_scroll(&mut self, ctx: &egui::Context) {
+        self.start_region_capture(ctx, daozai::capture_ui::Purpose::Scroll);
+    }
+
+    fn start_scroll_capture(
+        &mut self,
+        ctx: &egui::Context,
+        monitor: daozai::region_capture::MonitorRect,
+        selection: (i32, i32, u32, u32),
+        first: daozai::ocr::Image,
+    ) {
+        match daozai::scroll_capture::Capture::start(ctx, monitor, selection, first) {
+            Some(capture) => {
+                self.scroll_capture = Some(capture);
+                self.app.say("滚动页面开始拼接，完成后按 Ctrl+Alt+Shift+L");
+                ctx.request_repaint();
+            }
+            None => self.app.say("选区太小，无法开始滚动截图"),
+        }
+    }
+
+    fn show_scroll_capture(&mut self, ctx: &egui::Context) {
+        let Some(capture) = self.scroll_capture.as_mut() else { return };
+        let event = capture.poll(ctx);
+        match event {
+            daozai::scroll_capture::Event::None => {}
+            daozai::scroll_capture::Event::Finished(image) => {
+                self.scroll_capture = None;
+                self.annotate.open(ctx, image);
+                self.app.say("滚动截图已生成，可标注、复制或保存");
+            }
+            daozai::scroll_capture::Event::Cancelled => {
+                self.scroll_capture = None;
+                self.app.say("已取消滚动截图");
+            }
+        }
+    }
+
+    fn finish_scroll_capture(&mut self, ctx: &egui::Context) {
+        let Some(capture) = self.scroll_capture.as_mut() else { return };
+        if let Some(image) = capture.finish() {
+            self.scroll_capture = None;
+            self.annotate.open(ctx, image);
+            self.app.say("滚动截图已生成，可标注、复制或保存");
+        }
     }
 
     fn show_pins(&mut self, ctx: &egui::Context) {
@@ -810,6 +869,10 @@ impl Shell {
                 self.close_command_palette();
                 self.start_region_screenshot(ctx);
             }
+            PaletteAction::ScrollCapture => {
+                self.close_command_palette();
+                self.start_region_scroll(ctx);
+            }
             PaletteAction::CopyClipboard(id) => {
                 self.close_command_palette();
                 self.clipboard.copy(&id);
@@ -905,7 +968,14 @@ impl eframe::App for Shell {
             let command_hotkey = daozai::native::take_command_hotkey();
             let image_ocr = daozai::native::take_ocr_hotkey();
             let notification_hotkey = daozai::native::take_notification_hotkey();
-            if screen_shot {
+            let scroll_hotkey = daozai::native::take_scroll_hotkey();
+            if self.scroll_capture.is_some() {
+                if scroll_hotkey {
+                    self.finish_scroll_capture(ctx);
+                }
+            } else if scroll_hotkey {
+                self.start_region_scroll(ctx);
+            } else if screen_shot {
                 self.start_region_screenshot(ctx);
             } else if screen_ocr {
                 self.start_region_ocr(ctx);
@@ -1137,11 +1207,12 @@ impl eframe::App for Shell {
         self.show_command_palette(ctx);
         self.show_notifications(ctx);
         self.show_capture_overlay(ctx);
+        self.show_scroll_capture(ctx);
         self.show_annotate(ctx);
         self.show_pins(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() {
             Duration::from_millis(16)
         } else {
             repaint_after

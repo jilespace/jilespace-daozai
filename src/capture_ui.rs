@@ -24,6 +24,7 @@ pub enum Purpose {
     #[default]
     Ocr,
     Screenshot,
+    Scroll,
 }
 
 impl Purpose {
@@ -31,6 +32,7 @@ impl Purpose {
         match self {
             Self::Ocr => "拖动框选文字区域，松开后识别",
             Self::Screenshot => "拖动框选截图区域，松开后复制并保存",
+            Self::Scroll => "拖动框选滚动截图区域，松开后滚动页面自动拼接",
         }
     }
 }
@@ -565,5 +567,6 @@ mod tests {
             collect(&clipped.shape, &mut texts);
         }
         assert!(texts.iter().any(|text| text.galley.text().contains("拖动框选截图区域，松开后复制并保存")));
+        assert!(Purpose::Scroll.hint().contains("滚动截图区域"));
     }
 }
