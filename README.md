@@ -12,7 +12,7 @@ Windows 桌面伙伴 · 音乐与歌词 · 邮件验证码 · 日程提醒 · AI
 [![License](https://img.shields.io/badge/License-MIT-3cbf91)](LICENSE)
 [![CI](https://github.com/jilespace/jilespace-daozai/actions/workflows/ci.yml/badge.svg)](https://github.com/jilespace/jilespace-daozai/actions/workflows/ci.yml)
 
-[下载 Windows 版](https://github.com/jilespace/jilespace-daozai/releases/latest) · [使用指南](docs/USAGE.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/jilespace/jilespace-daozai/issues)
+[下载 Windows 版](https://github.com/jilespace/jilespace-daozai/releases/latest) · [使用指南](docs/USAGE.md) · [更新记录](CHANGELOG.md) · [路线图](docs/ROADMAP.md) · [反馈问题](https://github.com/jilespace/jilespace-daozai/issues)
 
 </div>
 
