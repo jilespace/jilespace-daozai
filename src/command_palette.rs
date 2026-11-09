@@ -1126,6 +1126,7 @@ const SETTINGS_TABS: &[(usize, &str, &str, &str)] = &[
     (11, "AI 额度", "账号、额度与常驻圆环", "quota ai account"),
     (12, "剪贴板", "历史开关、容量与清空", "clipboard history"),
     (9, "关于", "版本、更新与开源声明", "about update version"),
+    (13, "岛体外观", "不透明度、圆角与动效", "appearance opacity radius motion 外观 透明度 圆角 动效"),
 ];
 
 fn page_english_keywords(page: usize) -> &'static str {

@@ -703,6 +703,7 @@ impl App {
             s.visuals.selection.bg_fill = theme::alpha_blue(0.45);
         });
         let settings = model::Settings::load();
+        crate::bar_layout::set_motion_override(settings.motion.enabled());
         let (bw, bh) = if settings.minimal { (BAR_W_MIN, BAR_H_MIN) } else { (BAR_W, BAR_H) };
         let focus_seconds=settings.focus_minutes as f32*60.0;
         let initial_lyrics=settings.lyrics_enabled;
@@ -1262,7 +1263,7 @@ impl App {
     }
     /// 命令面板用：直接打开设置并切到指定标签。
     pub fn open_settings_tab(&mut self, tab: usize) {
-        self.settings_tab = tab.min(12);
+        self.settings_tab = tab.min(13);
         self.open_settings();
     }
     pub fn open_settings_category(&mut self,category:usize){
@@ -1317,6 +1318,11 @@ impl App {
         self.page_t0 = self.t;
         self.slide.pos = dir * PAGE_SLIDE + if self.page_e() < 0.4 { self.slide.pos * 0.3 } else { 0.0 };
         self.slide.target = 0.0;
+        if !crate::bar_layout::animations_enabled() {
+            // 关闭岛体动效时直接落到新页面，不做滑动和缓冲。
+            self.page_t0 = self.t - 10.0;
+            self.slide.snap(0.0);
+        }
         self.dots_target();
         self.cancel_edit();
     }
@@ -1405,6 +1411,11 @@ impl App {
     pub fn set_pet(&mut self,enabled:bool) {
         self.settings.pet=enabled;if enabled {self.settings.minimal=false;}self.settings.save();
     }
+    /// 把「岛体外观 → 动效」立即应用到岛体（设置页修改后调用）。
+    pub(crate) fn apply_motion_setting(&self) {
+        crate::bar_layout::set_motion_override(self.settings.motion.enabled());
+    }
+
     pub fn set_minimal(&mut self,enabled:bool) {
         self.settings.minimal=enabled;if enabled {self.settings.pet=false;}self.settings.save();
     }
@@ -1598,7 +1609,10 @@ impl App {
         let minimal_pill = self.effective_minimal() && !self.island_lyrics_active() && self.notice.is_none() && self.t>=self.notification_bell_until && pc < 0.02;
         let flare = if minimal_pill { 0.0 } else { lerp(5.0, FLARE, pc) };
         let k = (w / PW).clamp(0.3, 1.1);
-        let radius = if minimal_pill { BAR_H_MIN / 2.0 } else { lerp(12.5, RAD * k.min(1.0), pc) };
+        let radius_scale = self.settings.island_radius.clamp(60, 160) as f32 / 100.0;
+        let radius = if minimal_pill { BAR_H_MIN / 2.0 } else { lerp(12.5, RAD * k.min(1.0), pc) * radius_scale };
+        let shell_alpha = (255.0 * self.settings.island_opacity.clamp(45, 100) as f32 / 100.0).round() as u8;
+        let shell = Color32::from_black_alpha(shell_alpha);
         let flare_h = lerp(8.0, FLARE_H, pc);
         let thick = glass::thickness(PH);
         let shadow_k = glass::shadow_alpha(0.0, thick) / 0.12;
@@ -1606,8 +1620,8 @@ impl App {
         let notice_rect=self.notice_rect(cx,top);
         let notice_shape=notice_rect.map(|r|Rect::from_min_max(Pos2::new(r.left()-36.0,r.top()),r.max));
         if let Some(r)=notice_shape {shape::shadow(&painter,r,5.0,8.0,12.5,0.5*shadow_k);}
-        shape::fill(&painter, panel, flare, flare_h, radius, Color32::BLACK, feather);
-        if let Some(r)=notice_shape {shape::fill(&painter,r,5.0,8.0,12.5,Color32::BLACK,feather);}
+        shape::fill(&painter, panel, flare, flare_h, radius, shell, feather);
+        if let Some(r)=notice_shape {shape::fill(&painter,r,5.0,8.0,12.5,shell,feather);}
 
         // 内容只随形体「揭开」：不缩放，按面板裁剪，到 55% 才开始淡入
         let reveal = if self.open { smoothstep(0.50, 0.97, p) } else { smoothstep(0.55, 0.92, p) };
@@ -1654,7 +1668,7 @@ impl App {
         if let Some(rect)=notice_details {
             let radius=if self.hud_notice.as_ref().is_some_and(|a|a.meeting.is_some()){14.0}else{10.0};
             shape::shadow(&painter,rect,0.0,0.0,radius,0.5*shadow_k);
-            painter.rect_filled(rect,radius,Color32::BLACK);
+            painter.rect_filled(rect,radius,shell);
             self.draw_notice(&Card::new(ui,rect.min,rect.intersect(ui.max_rect())),rect,&self.hud_notice.clone().unwrap(),&mut cmds);
             if ctx.input(|i|i.pointer.any_pressed()&&i.pointer.interact_pos().is_some_and(|p|!rect.contains(p)&&!notice_rect.is_some_and(|r|r.contains(p)))){self.notice_details=false;}
         }
@@ -1806,9 +1820,14 @@ impl App {
         }
         let _ = inside;
         if self.open {self.h.target=self.expanded_height();}
+        let motion = crate::bar_layout::animations_enabled();
         let (prev_w,prev_h)=(self.w.pos,self.h.pos);
         self.w.step(dt);
         self.h.step(dt);
+        if !motion {
+            self.w.snap(self.w.target);
+            self.h.snap(self.h.target);
+        }
         // 仅在从外侧越过目标时收住，扩展提示条时不强制跳到目标宽度。
         if !self.open {
             if prev_w>=bw && self.w.pos<bw {self.w.snap(bw);}
@@ -1816,8 +1835,10 @@ impl App {
         }
         for d in &mut self.dots {
             d.step(dt);
+            if !motion { d.snap(d.target); }
         }
         self.slide.step(dt);
+        if !motion { self.slide.snap(0.0); }
     }
 
     // ---------------------------------------------------------------

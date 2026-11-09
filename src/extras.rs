@@ -1,6 +1,7 @@
 //! 设置、通知队列与岛仔表情。
 use crate::settings_theme::color as settings_color;
 use crate::app::{App, Cmd, Phase, HUD_TRACK_W, HUD_TRACK_X, HUD_W, PAGE_NAMES};
+use crate::model::MotionPreference;
 use crate::paint::{Card, H};
 use crate::theme::{self, size, W};
 use eframe::egui::{self, Color32, Rect};
@@ -762,8 +763,8 @@ fn setting_choices(ui:&mut egui::Ui,title:&str,value:&mut u32,values:[u32;3],uni
         });
     });
 }
-const SETTINGS_GROUPS: [(&str,usize,usize);9] = [
-    ("常规",0,0), ("页面管理",10,10), ("音乐与歌词",1,1), ("专注与饮水",2,3),
+const SETTINGS_GROUPS: [(&str,usize,usize);10] = [
+    ("常规",0,0), ("岛体外观",13,13), ("页面管理",10,10), ("音乐与歌词",1,1), ("专注与饮水",2,3),
     ("待办与置物",4,5), ("通知、邮箱与日程",6,8), ("AI 额度",11,11),
     ("剪贴板",12,12), ("关于",9,9),
 ];
@@ -850,6 +851,175 @@ impl App {
         });
     }
 
+    fn appearance_settings(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let muted = settings_color(&ctx, Color32::from_gray(180), Color32::from_gray(75));
+        ui.label(
+            egui::RichText::new("只影响岛体本身：透明度、圆角和动效会立即生效，设置页保持自己的主题。")
+                .size(12.0)
+                .color(muted),
+        );
+        settings_label(ui, "预览");
+        settings_card(ui, |ui| self.appearance_preview(ui));
+        settings_label(ui, "岛体");
+        settings_card(ui, |ui| {
+            let mut changed = false;
+            changed |= setting_number(ui, "不透明度", &mut self.settings.island_opacity, 45, 100, " %", 5.0);
+            ui.separator();
+            changed |= setting_number(ui, "圆角", &mut self.settings.island_radius, 60, 160, " %", 10.0);
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new("透明度越低，桌面透出越多；文字与图标保持不透明以保证可读性。")
+                    .size(11.0)
+                    .color(muted),
+            );
+            if changed {
+                // 岛体在主窗口里绘制，需要显式通知根视口重绘才能立即看到效果。
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
+        });
+        settings_label(ui, "动效");
+        settings_card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("岛体动效")
+                        .size(13.0)
+                        .color(settings_color(&ctx, Color32::WHITE, Color32::from_rgb(30, 34, 41))),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::Frame::new()
+                        .fill(settings_color(&ctx, Color32::from_rgb(28, 28, 30), Color32::from_rgb(235, 238, 243)))
+                        .corner_radius(7.0)
+                        .inner_margin(2)
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 1.0;
+                            ui.horizontal(|ui| {
+                                let mut changed = false;
+                                for (preference, label, width) in [
+                                    (MotionPreference::Off, "关闭", 50.0),
+                                    (MotionPreference::Full, "完整", 50.0),
+                                    (MotionPreference::System, "跟随系统", 82.0),
+                                ] {
+                                    let selected = self.settings.motion == preference;
+                                    let button = egui::Button::new(egui::RichText::new(label).size(11.5).color(
+                                        if selected {
+                                            settings_color(&ctx, Color32::WHITE, Color32::from_rgb(30, 34, 41))
+                                        } else {
+                                            settings_color(&ctx, Color32::from_gray(205), Color32::from_gray(55))
+                                        },
+                                    ))
+                                    .fill(if selected {
+                                        settings_color(&ctx, Color32::from_rgb(72, 72, 76), Color32::from_rgb(207, 216, 229))
+                                    } else {
+                                        Color32::TRANSPARENT
+                                    })
+                                    .stroke(egui::Stroke::NONE)
+                                    .corner_radius(5.0);
+                                    if ui.add_sized([width, 25.0], button).clicked() && !selected {
+                                        self.settings.motion = preference;
+                                        changed = true;
+                                    }
+                                }
+                                if changed {
+                                    self.apply_motion_setting();
+                                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                                    ctx.request_repaint();
+                                }
+                            });
+                        });
+                });
+            });
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new("跟随系统会读取 Windows 的「显示动画」设置；关闭后收起、翻页与常驻组件不再播放弹簧动画。")
+                    .size(11.0)
+                    .color(muted),
+            );
+        });
+        settings_label(ui, "提示");
+        settings_card(ui, |ui| {
+            ui.label(
+                egui::RichText::new("把鼠标移到屏幕顶部即可预览实际收起与展开效果；外观设置会保存在本机，重启后继续生效。")
+                    .size(11.5)
+                    .color(settings_color(&ctx, Color32::from_gray(180), Color32::from_gray(75))),
+            );
+        });
+    }
+
+    /// 设置页里的岛体外观预览：棋盘格 + 彩色背景，直接看出透明度与圆角。
+    fn appearance_preview(&self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let width = ui.available_width().max(240.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 104.0), egui::Sense::hover());
+        let painter = ui.painter().with_clip_rect(rect);
+        let dark = settings_color(&ctx, Color32::from_rgb(42, 42, 47), Color32::from_rgb(226, 229, 234));
+        let light = settings_color(&ctx, Color32::from_rgb(54, 54, 60), Color32::from_rgb(210, 214, 221));
+        let cell = 14.0;
+        let mut row = 0;
+        let mut y = rect.top();
+        while y < rect.bottom() {
+            let mut column = row;
+            let mut x = rect.left();
+            while x < rect.right() {
+                let color = if (row + column) % 2 == 0 { dark } else { light };
+                painter.rect_filled(
+                    Rect::from_min_max(egui::pos2(x, y), egui::pos2((x + cell).min(rect.right()), (y + cell).min(rect.bottom()))),
+                    0.0,
+                    color,
+                );
+                x += cell;
+                column += 1;
+            }
+            y += cell;
+            row += 1;
+        }
+        // 彩色渐变带用来衬托半透明效果。
+        let band = Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 38.0));
+        let steps = 24;
+        for index in 0..steps {
+            let t = index as f32 / (steps - 1) as f32;
+            let color = crate::paint::mix(theme::BLUE, Color32::from_rgb(186, 140, 255), t);
+            let x = band.left() + band.width() * index as f32 / steps as f32;
+            painter.rect_filled(
+                Rect::from_min_size(egui::pos2(x, band.top()), egui::vec2(band.width() / steps as f32 + 0.6, band.height())),
+                0.0,
+                color,
+            );
+        }
+        let island_width = 300.0_f32.min(rect.width() - 40.0);
+        let island_height = 58.0;
+        let island = Rect::from_center_size(rect.center(), egui::vec2(island_width, island_height));
+        let scale = island_width / crate::app::PW;
+        let radius = (crate::app::RAD * scale * self.settings.island_radius as f32 / 100.0).clamp(8.0, island_height / 2.0);
+        let alpha = (255.0 * self.settings.island_opacity as f32 / 100.0).round() as u8;
+        let shell = Color32::from_black_alpha(alpha);
+        // 收起态是圆润的药丸，不画顶部外翻肩，预览更接近实际观感。
+        crate::shape::shadow(&painter, island, 0.0, 0.0, radius, 0.55);
+        crate::shape::fill(&painter, island, 0.0, 0.0, radius, shell, 1.0 / ctx.pixels_per_point());
+        painter.circle_filled(egui::pos2(island.left() + 24.0, island.center().y), 3.5, theme::GREEN);
+        painter.text(
+            island.center(),
+            egui::Align2::CENTER_CENTER,
+            "10:28",
+            theme::font(17.0, W::Bold),
+            Color32::WHITE,
+        );
+        for (index, color) in [theme::BLUE, theme::GREEN, theme::YELLOW].into_iter().enumerate() {
+            painter.circle_filled(
+                egui::pos2(island.right() - 54.0 + index as f32 * 15.0, island.center().y),
+                3.0,
+                color,
+            );
+        }
+        painter.text(
+            egui::pos2(rect.right() - 8.0, rect.bottom() - 6.0),
+            egui::Align2::RIGHT_BOTTOM,
+            "预览",
+            theme::font(9.0, W::Regular),
+            Color32::from_white_alpha(180),
+        );
+    }
+
     pub fn settings_ui(&mut self,ctx:&egui::Context,autostart:bool){
         self.updates.poll(ctx);
         self.updates.dialog_ui(ctx);
@@ -895,6 +1065,7 @@ impl App {
                         4=>egui::include_image!("../assets/settings-icons/system/tasks.svg"),
                         6=>egui::include_image!("../assets/settings-icons/system/notifications.svg"),
                         12=>egui::include_image!("../assets/settings-icons/system/clipboard.svg"),
+                        13=>egui::include_image!("../assets/settings-icons/system/appearance.svg"),
                         _=>egui::include_image!("../assets/settings-icons/system/about.svg"),
                     };
                     let icon_bg=egui::Rect::from_center_size(egui::pos2(rect.left()+21.0,rect.center().y),egui::vec2(25.0,25.0));
@@ -915,8 +1086,8 @@ impl App {
                 ui.visuals_mut().widgets.hovered.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().widgets.active.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().selection.bg_fill=settings_color(ctx,Color32::from_rgb(45,105,165),Color32::from_rgb(209,226,248));
-                let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度","剪贴板"];
-                ui.label(egui::RichText::new(titles[self.settings_tab.min(12)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
+                let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度","剪贴板","岛体外观"];
+                ui.label(egui::RichText::new(titles[self.settings_tab.min(13)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
                 if let Some((_,start,end))=SETTINGS_GROUPS.iter().find(|(_,start,end)|(*start..=*end).contains(&self.settings_tab)) {
                     if start!=end {
                         ui.add_space(7.0);
@@ -939,6 +1110,7 @@ impl App {
                     match self.settings_tab {
                     11=>self.quota_settings(ui),
                     12=>self.clipboard_settings(ui),
+                    13=>self.appearance_settings(ui),
                     10=>{
                         ui.label(egui::RichText::new("选择需要的页面和状态组件。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
                         settings_label(ui,"常驻排列");

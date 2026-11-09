@@ -83,6 +83,41 @@ fn replace_file(tmp:&Path,path:&Path)->std::io::Result<()> {
     result
 }
 
+/// 岛体动效偏好：跟随系统（Windows 的「显示动画」设置）、始终开启或关闭。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MotionPreference {
+    #[default]
+    System,
+    Full,
+    Off,
+}
+
+impl MotionPreference {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Full => "full",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "full" => Self::Full,
+            "off" => Self::Off,
+            _ => Self::System,
+        }
+    }
+
+    pub fn enabled(self) -> Option<bool> {
+        match self {
+            Self::System => None,
+            Self::Full => Some(true),
+            Self::Off => Some(false),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub settings_theme: crate::settings_theme::SettingsTheme,
@@ -92,6 +127,11 @@ pub struct Settings {
     pub visible_pages: [bool; 10],
     pub page_order: [usize; 10],
     pub show_battery: bool,
+    /// 岛体不透明度（45..100）。
+    pub island_opacity: u32,
+    /// 岛体圆角百分比（60..160）。
+    pub island_radius: u32,
+    pub motion: MotionPreference,
     pub resident_order: Vec<usize>,
     pub system_hud: bool,
     pub read_notifications:bool,
@@ -127,7 +167,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true; 10], page_order: [0,1,2,3,4,5,6,7,8,9], show_battery: true, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, stay_awake: false }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true; 10], page_order: [0,1,2,3,4,5,6,7,8,9], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, stay_awake: false }
     }
 }
 
@@ -155,6 +195,9 @@ impl Settings {
                     }
                 }
                 "show_battery" => s.show_battery = v != "0",
+                "island_opacity" => s.island_opacity = v.parse::<u32>().unwrap_or(100).clamp(45, 100),
+                "island_radius" => s.island_radius = v.parse::<u32>().unwrap_or(100).clamp(60, 160),
+                "motion" => s.motion = MotionPreference::parse(&v),
                 "visible_pages" if (6..=10).contains(&v.len()) && v.bytes().all(|b| b==b'0' || b==b'1') => {
                     for (enabled,value) in s.visible_pages.iter_mut().zip(v.bytes()) { *enabled=value==b'1'; }
                     for enabled in &mut s.visible_pages[v.len()..]{*enabled=v.bytes().any(|b|b==b'1');}
@@ -208,6 +251,9 @@ impl Settings {
                 ("page_order".into(),self.page_order.iter().map(usize::to_string).collect::<Vec<_>>().join(",")),
                 ("resident_order".into(),self.resident_order.iter().map(usize::to_string).collect::<Vec<_>>().join(",")),
                 ("show_battery".into(), (self.show_battery as u8).to_string()),
+                ("island_opacity".into(), self.island_opacity.to_string()),
+                ("island_radius".into(), self.island_radius.to_string()),
+                ("motion".into(), self.motion.key().into()),
                 ("read_notifications".into(),(self.read_notifications as u8).to_string()),
                 ("system_hud".into(), (self.system_hud as u8).to_string()),
                 ("notifications".into(), (self.notifications as u8).to_string()),

@@ -6,6 +6,44 @@ use std::sync::Mutex;
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn appearance_settings_persist_and_apply_to_island() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings.island_opacity=72;
+    h.app.settings.island_radius=150;
+    h.app.settings.motion=crate::model::MotionPreference::Off;
+    h.app.settings.save();
+    let loaded=crate::model::Settings::load();
+    assert_eq!((loaded.island_opacity,loaded.island_radius),(72,150));
+    assert_eq!(loaded.motion,crate::model::MotionPreference::Off);
+    std::fs::write(crate::model::config_dir().join("settings.txt"),"island_opacity=10\nisland_radius=999\nmotion=full\n").unwrap();
+    let clamped=crate::model::Settings::load();
+    assert_eq!((clamped.island_opacity,clamped.island_radius),(45,160));
+    assert_eq!(clamped.motion,crate::model::MotionPreference::Full);
+    // 动效开关立即应用
+    h.app.settings.motion=crate::model::MotionPreference::Off;
+    h.app.apply_motion_setting();
+    assert!(!crate::bar_layout::animations_enabled());
+    h.app.settings.motion=crate::model::MotionPreference::Full;
+    h.app.apply_motion_setting();
+    assert!(crate::bar_layout::animations_enabled());
+    h.app.settings.motion=crate::model::MotionPreference::System;
+    h.app.apply_motion_setting();
+    // 半透明面板：填充网格里应出现对应 alpha 的顶点。
+    h.app.settings.island_opacity=60;
+    h.frame(vec![]);
+    let shell=egui::Color32::from_black_alpha(153);
+    fn has_color(shape:&egui::Shape,color:egui::Color32)->bool {
+        match shape {
+            egui::Shape::Mesh(mesh)=>mesh.vertices.iter().any(|vertex|vertex.color==color),
+            egui::Shape::Vec(items)=>items.iter().any(|item|has_color(item,color)),
+            _=>false,
+        }
+    }
+    assert!(h.shapes.iter().any(|clipped|has_color(&clipped.shape,shell)),"岛体填充应使用设置的不透明度");
+}
+
+#[test]
 fn timer_page_runs_countdown_and_stopwatch() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
@@ -3448,7 +3486,7 @@ fn settings_theme_follows_system_and_preserves_island_style() {
                 viewports:std::iter::once((id,egui::ViewportInfo{native_pixels_per_point:Some(1.0),..Default::default()})).collect(),..Default::default()};
             *capture.lock().unwrap()=Some(ctx.run(raw,|ctx|(viewport.viewport_ui_cb)(ctx)));
         });
-        for tab in 0..13 {
+        for tab in 0..14 {
             h.app.settings_tab=tab;
             for frame in 0..3 {
                 h.ctx.data_mut(|d|d.insert_temp(egui::Id::new("settings-system-theme"),(std::time::Instant::now(),system)));

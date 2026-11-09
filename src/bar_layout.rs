@@ -16,7 +16,29 @@ pub(crate) fn valid_order(order:&[usize])->bool {
     order.len()==6 && DEFAULT_ORDER.iter().all(|slot|order.iter().filter(|value|*value==slot).count()==1)
 }
 
+/// 用户外观设置对岛体动效的覆盖：-1 跟随系统，0 关闭，1 开启。
+static MOTION_OVERRIDE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+pub(crate) fn set_motion_override(enabled: Option<bool>) {
+    MOTION_OVERRIDE.store(
+        match enabled {
+            None => -1,
+            Some(false) => 0,
+            Some(true) => 1,
+        },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 pub(crate) fn animations_enabled()->bool {
+    match MOTION_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        0 => false,
+        _ => system_animations_enabled(),
+    }
+}
+
+fn system_animations_enabled()->bool {
     #[cfg(windows)] {
         static ENABLED:std::sync::OnceLock<bool>=std::sync::OnceLock::new();
         *ENABLED.get_or_init(||{
