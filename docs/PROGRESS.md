@@ -23,6 +23,13 @@
 **新增功能（用户可见）**
 - 一个键盘优先的入口：跳页面、跳设置、启动应用、做算术、换单位，`Enter` 即执行或复制。
 
+**验证**
+- `cargo test --locked --all-targets --features record -- --test-threads=1`：470 通过、37 忽略。
+- `cargo build --locked --release --bin daozai`：通过。
+- 离屏截图：`DAOZAI_CLIPBOARD_PREVIEW_DIR` / `DAOZAI_COMMAND_PREVIEW_DIR` 输出深色、浅色、
+  计算、空结果等 PNG 并逐张检查对齐与截断（`preview/` 不入库）。
+- 限制：本轮未在桌面实机按热键、启动真实应用或等待托盘菜单截图；下一次真机验收补上。
+
 **后续计划**
 - 命令面板继续增强：搜索剪贴板记录、翻译与快捷搜索、自定义常用命令与排序。
 - Phase C：系统页（CPU/内存/网络/磁盘实时读数与迷你折线）。
