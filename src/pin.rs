@@ -24,7 +24,8 @@ pub fn window_size(image: &Image, pixels_per_point: f32) -> Vec2 {
 static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub struct Pin {
-    image: Image,
+    /// 纹理创建后即释放原图，避免多张贴图各占一份全分辨率 RGBA。
+    image: Option<Image>,
     texture: Option<egui::TextureHandle>,
     base_size: Vec2,
     zoom: f32,
@@ -45,7 +46,7 @@ impl Pin {
             base_size: window_size(&image, pixels_per_point),
             zoom: 1.0,
             opacity: 1.0,
-            image,
+            image: Some(image),
             texture: None,
             position: None,
             viewport: egui::ViewportId::from_hash_of(("daozai-pin", serial)),
@@ -126,13 +127,15 @@ impl Pin {
         let _ = dark;
         let mut closed = false;
         if self.texture.is_none() {
-            // 与标注编辑器一致：超过纹理上限的截图先缩略显示，贴图窗口本身保持比例。
-            let display = crate::annotate::display_image(&self.image);
-            let pixels = egui::ColorImage::from_rgba_unmultiplied(
-                [display.width as usize, display.height as usize],
-                &display.rgba,
-            );
-            self.texture = Some(ctx.load_texture("pinned-shot", pixels, egui::TextureOptions::LINEAR));
+            if let Some(image) = self.image.take() {
+                // 与标注编辑器一致：超过纹理上限的截图先缩略显示，贴图窗口本身保持比例。
+                let display = crate::annotate::display_image(&image);
+                let pixels = egui::ColorImage::from_rgba_unmultiplied(
+                    [display.width as usize, display.height as usize],
+                    &display.rgba,
+                );
+                self.texture = Some(ctx.load_texture("pinned-shot", pixels, egui::TextureOptions::LINEAR));
+            }
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(Color32::TRANSPARENT))
@@ -239,6 +242,23 @@ mod tests {
         let size = window_size(&tall, 1.0);
         assert!(size.y <= 1200.0);
         assert!((size.x / size.y - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn pin_releases_source_image_after_uploading_texture() {
+        let ctx = egui::Context::default();
+        crate::theme::load_fonts(&ctx);
+        let mut pin = Pin::new(gradient(120, 80), 2.0);
+        assert!(pin.image.is_some());
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, pin.display_size())),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| {
+            let _ = pin.paint(ctx, true);
+        });
+        assert!(pin.image.is_none(), "上传纹理后应释放全分辨率原图");
+        assert!(pin.texture.is_some());
     }
 
     #[test]

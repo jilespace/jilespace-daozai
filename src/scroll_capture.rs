@@ -12,6 +12,8 @@ use crate::ocr::Image;
 use crate::region_capture::{capture_region, MonitorRect};
 
 pub const MAX_HEIGHT: u32 = 8000;
+/// 拼接结果的总像素上限（约 61 MB RGBA），避免超宽区域把内存撑爆。
+pub const MAX_PIXELS: u32 = 16_000_000;
 pub const MAX_OVERLAP_BAND: u32 = 64;
 pub const MAX_MATCH_ERROR: f32 = 14.0;
 pub const INTERVAL: Duration = Duration::from_millis(350);
@@ -44,11 +46,17 @@ impl Stitcher {
         &self.image
     }
 
+    /// 当前宽度下允许的最大高度：8000 行与 1600 万像素取较小值。
+    pub fn row_limit(&self) -> u32 {
+        row_limit_for(self.image.width)
+    }
+
     pub fn append(&mut self, next: &Image) -> Append {
         if next.width != self.image.width || next.height == 0 {
             return Append::NoOverlap;
         }
-        if self.image.height >= MAX_HEIGHT {
+        let limit = self.row_limit();
+        if self.image.height >= limit {
             return Append::Full;
         }
         let band = MAX_OVERLAP_BAND.min(next.height).min(self.image.height) as usize;
@@ -65,7 +73,7 @@ impl Stitcher {
         if new_start >= next.height as usize {
             return Append::NoChange;
         }
-        let room = (MAX_HEIGHT - self.image.height) as usize;
+        let room = (limit - self.image.height) as usize;
         let rows = (next.height as usize - new_start).min(room);
         if rows == 0 {
             return Append::Full;
@@ -118,6 +126,11 @@ impl Stitcher {
         }
         best
     }
+}
+
+/// 按宽度计算拼接高度上限。
+pub fn row_limit_for(width: u32) -> u32 {
+    (MAX_PIXELS / width.max(1)).min(MAX_HEIGHT).max(1)
 }
 
 #[derive(Clone, Debug)]
@@ -393,6 +406,20 @@ mod tests {
         let jump = slice(&content, 560, 40);
         assert_eq!(stitcher.append(&jump), Append::NoOverlap);
         assert_eq!(stitcher.height(), 360);
+    }
+
+    #[test]
+    fn total_pixel_cap_limits_tall_and_wide_stitches() {
+        assert_eq!(row_limit_for(1920), 8000, "1920 宽仍受 8000 行上限约束");
+        assert_eq!(row_limit_for(3840), 4166, "4K 宽按 1600 万像素换算");
+        assert_eq!(row_limit_for(8000), 2000);
+        assert_eq!(row_limit_for(0), 8000);
+        let content = content(9000);
+        let mut stitcher = Stitcher::new(slice(&content, 0, 4000));
+        // 4K 宽时理论上限 4166 行，超过后返回 Full 而不是继续增长。
+        stitcher.image.width = 3840;
+        stitcher.image.rgba.resize(3840 * 4000 * 4, 128);
+        assert_eq!(stitcher.row_limit(), 4166);
     }
 
     #[test]

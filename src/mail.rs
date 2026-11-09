@@ -373,6 +373,23 @@ pub fn parse_message(raw: &[u8]) -> Parsed {
 }
 
 /// 优先纯文本，HTML 邮件转成文字；保留完整正文与段落。
+/// 单封邮件正文进入内存前的硬上限，避免超大邮件把「最近 60 封」撑爆内存。
+pub const MAX_SUMMARY_BYTES: usize = 256 * 1024;
+pub const SUMMARY_TRUNCATED: &str = "\n…（邮件过长，已截断）";
+
+pub fn cap_summary(mut text: String) -> String {
+    if text.len() <= MAX_SUMMARY_BYTES {
+        return text;
+    }
+    let mut end = MAX_SUMMARY_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push_str(SUMMARY_TRUNCATED);
+    text
+}
+
 pub fn body_of(parsed:&Parsed)->String {
     let body = if !parsed.text.trim().is_empty() {
         parsed.text.clone()
@@ -993,7 +1010,7 @@ mod service {
                 .map(|d| d.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
                 .unwrap_or_default(),
             code: code_of(&parsed),
-            summary: body_of(&parsed),
+            summary: cap_summary(body_of(&parsed)),
             links: links_of(&parsed),
             meeting: meeting_of(&parsed.calendar),
             uid: fetch.uid.unwrap_or(0),
@@ -1148,6 +1165,18 @@ pub use service::Service;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn long_mail_summaries_are_capped_without_splitting_utf8() {
+        let huge = "邮件正文".repeat(MAX_SUMMARY_BYTES / 6);
+        let capped = cap_summary(huge);
+        assert!(capped.len() <= MAX_SUMMARY_BYTES + SUMMARY_TRUNCATED.len());
+        assert!(capped.ends_with("已截断）"));
+        assert!(std::str::from_utf8(capped.as_bytes()).is_ok());
+        let short = "你好，世界".to_string();
+        assert_eq!(cap_summary(short.clone()), short);
+    }
     #[test]
     fn quality_cancelled_meetings_are_not_active_events() {
         let event="BEGIN:VEVENT\nUID:cancelled\nDTSTART:20261101T060000Z\nSTATUS:CANCELLED\nEND:VEVENT";

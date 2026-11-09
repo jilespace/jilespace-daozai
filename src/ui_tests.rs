@@ -58,6 +58,17 @@ fn idle_repaint_policy_follows_animation_state() {
     h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,duration:120.0,..Default::default()};
     for _ in 0..30 {h.frame(vec![]);}
     assert!(h.repaint_after<=std::time::Duration::from_millis(40),"播放时应保持动画刷新，实际 {:?}",h.repaint_after);
+    // 系统闲置 1 分钟后，睡眠中的吉祥物应进一步降频到 5 帧。
+    h.media=Default::default();
+    h.app.set_pet(true);
+    h.cursor=None;
+    h.system_idle=Some(120.0);
+    for _ in 0..80 {h.frame(vec![]);}
+    assert!(h.repaint_after>=std::time::Duration::from_millis(150),"长时间闲置时睡眠吉祥物应降频，实际 {:?}",h.repaint_after);
+    h.system_idle=Some(0.0);
+    h.cursor=None;
+    for _ in 0..120 {h.frame(vec![]);}
+    assert!(h.repaint_after<=std::time::Duration::from_millis(120),"闲置值恢复后应从 5 帧回到 10 帧，实际 {:?}",h.repaint_after);
 }
 
 fn sample_weather() -> crate::weather::Weather {
