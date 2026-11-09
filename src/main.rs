@@ -84,6 +84,8 @@ struct Shell {
     capture_image: Option<daozai::ocr::Image>,
     capture_monitor: Option<daozai::region_capture::MonitorRect>,
     command_palette: daozai::command_palette::Panel,
+    /// 最近从命令面板启动的应用（持久化）。
+    recent_apps: daozai::command_palette::RecentApps,
     /// 系统页采样器与最近一次结果。
     perf: daozai::perf::Sampler,
     perf_at: PollClock,
@@ -193,6 +195,7 @@ impl Shell {
             capture_image: None,
             capture_monitor: None,
             command_palette: daozai::command_palette::Panel::default(),
+            recent_apps: daozai::command_palette::RecentApps::load(),
             perf: daozai::perf::Sampler::new(),
             perf_at: PollClock::default(),
             perf_value: Default::default(),
@@ -760,6 +763,7 @@ impl Shell {
         }
         let mut snapshot = self.app.palette_snapshot();
         snapshot.pins = self.pins.len();
+        self.command_palette.set_recent(self.recent_apps.items());
         self.command_palette.open(&snapshot);
         let entries = self.palette_clipboard_entries();
         self.command_palette.set_clipboard(entries);
@@ -805,8 +809,11 @@ impl Shell {
             }
             PaletteAction::LaunchApp(path) => {
                 self.close_command_palette();
+                let name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("应用").to_string();
                 if let Err(error) = open_path(&path) {
                     self.app.say(format!("无法启动应用：{error}"));
+                } else {
+                    self.recent_apps.record(&name, &path);
                 }
             }
             PaletteAction::CopyText(text) => {

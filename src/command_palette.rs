@@ -80,6 +80,7 @@ pub struct PageInfo {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Section {
+    Recent,
     Action,
     Clipboard,
     Page,
@@ -91,6 +92,7 @@ enum Section {
 impl Section {
     fn label(self) -> &'static str {
         match self {
+            Self::Recent => "最近",
             Self::Action => "操作",
             Self::Clipboard => "剪贴板",
             Self::Page => "页面",
@@ -103,11 +105,12 @@ impl Section {
     fn order(self) -> usize {
         match self {
             Self::Calc => 0,
-            Self::Action => 1,
-            Self::Clipboard => 2,
-            Self::Page => 3,
-            Self::Setting => 4,
-            Self::App => 5,
+            Self::Recent => 1,
+            Self::Action => 2,
+            Self::Clipboard => 3,
+            Self::Page => 4,
+            Self::Setting => 5,
+            Self::App => 6,
         }
     }
 }
@@ -143,6 +146,64 @@ struct AppEntry {
     path: PathBuf,
 }
 
+/// 最近从命令面板启动的应用（持久化，最多 12 条，展示前 5 条）。
+#[derive(Clone, Debug, Default)]
+pub struct RecentApps {
+    items: Vec<(String, std::path::PathBuf)>,
+}
+
+impl RecentApps {
+    pub fn load() -> Self {
+        let text = match std::fs::read_to_string(Self::path()) {
+            Ok(text) => text,
+            Err(_) => return Self::default(),
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        let items = value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                let name = item.get("name")?.as_str()?.to_string();
+                let path = std::path::PathBuf::from(item.get("path")?.as_str()?);
+                Some((name, path))
+            })
+            .take(12)
+            .collect();
+        Self { items }
+    }
+
+    pub fn items(&self) -> Vec<(String, std::path::PathBuf)> {
+        self.items.iter().take(5).cloned().collect()
+    }
+
+    pub fn record(&mut self, name: &str, path: &std::path::Path) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        self.items.retain(|(_, existing)| existing != path);
+        self.items.insert(0, (name.to_string(), path.to_path_buf()));
+        self.items.truncate(12);
+        self.save();
+    }
+
+    fn save(&self) {
+        let value: Vec<serde_json::Value> = self
+            .items
+            .iter()
+            .map(|(name, path)| serde_json::json!({"name": name, "path": path.to_string_lossy()}))
+            .collect();
+        if let Ok(text) = serde_json::to_string(&value) {
+            let _ = crate::model::atomic_write(&Self::path(), text.as_bytes());
+        }
+    }
+
+    fn path() -> std::path::PathBuf {
+        crate::model::config_dir().join("recent-apps.json")
+    }
+}
+
 /// 命令面板里可搜索的剪贴板条目（只带预览，不复制整段大文本）。
 #[derive(Clone, Debug)]
 pub struct ClipboardItem {
@@ -158,6 +219,7 @@ pub struct Panel {
     base: Vec<Entry>,
     snapshot: Snapshot,
     clipboard: Vec<ClipboardItem>,
+    recent: Vec<(String, std::path::PathBuf)>,
     results: Vec<Entry>,
     apps: Vec<AppEntry>,
     apps_at: Option<Instant>,
@@ -183,6 +245,7 @@ impl Default for Panel {
             base: Vec::new(),
             snapshot: Snapshot::default(),
             clipboard: Vec::new(),
+            recent: Vec::new(),
             results: Vec::new(),
             apps: Vec::new(),
             apps_at: None,
@@ -201,6 +264,11 @@ impl Default for Panel {
 }
 
 impl Panel {
+    /// 最近启动的应用；空查询时排在最前。
+    pub fn set_recent(&mut self, recent: Vec<(String, std::path::PathBuf)>) {
+        self.recent = recent.into_iter().take(5).collect();
+    }
+
     /// 更新命令面板可搜索的剪贴板条目；内容没变时不重建。
     pub fn set_clipboard(&mut self, items: Vec<ClipboardItem>) {
         if self.clipboard.len() == items.len()
@@ -514,6 +582,17 @@ impl Panel {
                 glyph: Glyph::App,
             });
         }
+        for (name, path) in self.recent.iter() {
+            entries.push(Entry {
+                id: format!("recent-{}", path.display()),
+                section: Section::Recent,
+                title: name.clone(),
+                subtitle: "最近启动 · Enter 打开".into(),
+                haystack: format!("{name} {} 最近 recent app launch", path.display()).to_lowercase(),
+                action: Action::LaunchApp(path.clone()),
+                glyph: Glyph::App,
+            });
+        }
         for item in self.clipboard.iter().take(30) {
             let one_line = item.text.lines().next().unwrap_or("").trim();
             let title = if one_line.chars().count() > 68 {
@@ -541,6 +620,9 @@ impl Panel {
         let mut matches: Vec<(u16, usize, usize, Entry)> = Vec::new();
         for (index, entry) in self.base.iter().enumerate() {
             if needle.is_empty() && matches!(entry.section, Section::App | Section::Clipboard) {
+                continue;
+            }
+            if !needle.is_empty() && entry.section == Section::Recent {
                 continue;
             }
             if let Some(score) = match_score(entry, &needle) {
@@ -1974,6 +2056,38 @@ mod tests {
     }
 
     #[test]
+    fn recent_apps_appear_only_on_empty_query_and_keep_order() {
+        let mut palette = Panel::default();
+        palette.set_recent(vec![
+            ("微信".into(), std::path::PathBuf::from("C:/Apps/WeChat.exe")),
+            ("Code".into(), std::path::PathBuf::from("C:/Apps/Code.exe")),
+        ]);
+        palette.open(&snapshot());
+        assert!(palette.results.first().is_some_and(|entry| entry.section == Section::Recent));
+        assert!(palette.results.iter().any(|entry| entry.title == "微信"));
+        assert!(palette.results.iter().any(|entry| entry.title == "Code"));
+        palette.query = "微信".into();
+        palette.rebuild();
+        assert!(palette.results.iter().all(|entry| entry.section != Section::Recent), "输入后应由应用分组统一匹配");
+        assert!(palette.results.iter().any(|entry| matches!(entry.action, Action::LaunchApp(_))));
+    }
+
+    #[test]
+    fn recent_apps_dedupe_and_cap() {
+        let mut recent = RecentApps::default();
+        for index in 0..20 {
+            recent.items.push((format!("App{index}"), std::path::PathBuf::from(format!("C:/A{index}.exe"))));
+        }
+        recent.items.truncate(12);
+        let mut recent = RecentApps { items: recent.items };
+        recent.record("App5", std::path::Path::new("C:/A5.exe"));
+        assert_eq!(recent.items[0].0, "App5");
+        assert_eq!(recent.items.iter().filter(|(_, path)| path.ends_with("A5.exe")).count(), 1);
+        assert!(recent.items.len() <= 12);
+        assert!(recent.items().len() <= 5);
+    }
+
+    #[test]
     fn clipboard_entries_are_searchable_but_hidden_from_empty_query() {
         let mut palette = Panel::default();
         palette.open(&snapshot());
@@ -2236,6 +2350,17 @@ mod tests {
         let unit = render_palette(&mut unit, true);
         assert_inside(&unit, "单位换算");
         assert!(contains(&unit.shapes, "32.2222"));
+        let mut recent_panel = Panel::default();
+        recent_panel.set_recent(vec![
+            ("微信".into(), std::path::PathBuf::from("C:/Apps/WeChat.exe")),
+            ("Visual Studio Code".into(), std::path::PathBuf::from("C:/Apps/Code.exe")),
+        ]);
+        recent_panel.open(&snapshot());
+        recent_panel.fade = 1.0;
+        let recent_panel = render_palette(&mut recent_panel, true);
+        assert_inside(&recent_panel, "最近启动");
+        assert!(contains(&recent_panel.shapes, "最近启动"));
+        assert!(contains(&recent_panel.shapes, "微信"));
         let mut clipboard = Panel::default();
         clipboard.open(&snapshot());
         clipboard.set_clipboard(vec![
@@ -2259,6 +2384,7 @@ mod tests {
             write_png(&app, &dest.join("command-app.png"));
             write_png(&unit, &dest.join("command-unit.png"));
             write_png(&clipboard, &dest.join("command-clipboard.png"));
+            write_png(&recent_panel, &dest.join("command-recent.png"));
         }
     }
 }
