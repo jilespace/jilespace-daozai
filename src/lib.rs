@@ -6,12 +6,14 @@
 //! - `native` / `tray`：仅 Windows 的窗口区域、命中穿透与托盘
 
 pub mod poll_clock;
+pub mod region_capture;
 pub mod anim;
 pub mod app;
 pub mod bt;
 pub mod calendar;
 pub mod clipboard;
 pub mod clipboard_ui;
+pub mod capture_ui;
 pub mod command_palette;
 mod calendar_ui;
 mod local_calendar;

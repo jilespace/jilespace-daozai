@@ -1047,6 +1047,7 @@ impl App {
                                 ("命令面板","搜索页面、设置与已安装应用，也可直接计算或换算",crate::command_palette::HOTKEY_TEXT),
                                 ("剪贴板历史","搜索并粘贴最近复制的文本",crate::clipboard::HOTKEY_TEXT),
                                 ("识别图片文字","读取剪贴板里的图片，用 Windows 本地 OCR 识别",crate::ocr::HOTKEY_TEXT),
+                                ("截屏框选取字","框选屏幕区域后本地 OCR 识别","Ctrl+Alt+Shift+O"),
                             ] {
                                 ui.horizontal(|ui|{
                                     ui.vertical(|ui|{

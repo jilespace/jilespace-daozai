@@ -38,6 +38,7 @@ pub enum Action {
     Clear,
     OpenSettings,
     OcrClipboard,
+    CropOcr,
     Close { restore: bool },
 }
 
@@ -539,6 +540,10 @@ impl Popup {
                         }
                         if ui.button("识别图片文字…").clicked() {
                             action = Action::OcrClipboard;
+                            ui.close_menu();
+                        }
+                        if ui.button("截屏框选取字…").clicked() {
+                            action = Action::CropOcr;
                             ui.close_menu();
                         }
                         ui.separator();

@@ -60,6 +60,10 @@ struct Shell {
     clipboard_status: String,
     /// 剪贴板图片 OCR 的后台结果。
     ocr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// 框选取字：整屏位图、目标显示器与全屏遮罩。
+    capture_overlay: daozai::capture_ui::Overlay,
+    capture_image: Option<daozai::ocr::Image>,
+    capture_monitor: Option<daozai::region_capture::MonitorRect>,
     command_palette: daozai::command_palette::Panel,
     /// 系统页采样器与最近一次结果。
     perf: daozai::perf::Sampler,
@@ -144,6 +148,9 @@ impl Shell {
             clipboard_transfer: None,
             clipboard_status: String::new(),
             ocr_rx: None,
+            capture_overlay: Default::default(),
+            capture_image: None,
+            capture_monitor: None,
             command_palette: daozai::command_palette::Panel::default(),
             perf: daozai::perf::Sampler::new(),
             perf_at: PollClock::default(),
@@ -162,6 +169,7 @@ impl Shell {
                 Event::OpenClipboard=>self.open_clipboard(ctx, false),
                 Event::OpenCommandPalette=>self.open_command_palette(ctx),
                 Event::OcrClipboard=>self.run_ocr(ctx),
+                Event::CropOcr=>self.start_region_ocr(ctx),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -330,6 +338,10 @@ impl Shell {
                 self.close_clipboard(false);
                 self.run_ocr(ctx);
             }
+            daozai::clipboard_ui::Action::CropOcr => {
+                self.close_clipboard(false);
+                self.start_region_ocr(ctx);
+            }
             daozai::clipboard_ui::Action::OpenSettings => {
                 self.close_clipboard(false);
                 self.app.open_settings();
@@ -346,6 +358,85 @@ impl Shell {
         self.clipboard_popup.clear_error();
         self.clipboard_transfer = Some((id.clone(), paste));
         self.clipboard.copy(&id);
+    }
+
+    /// 打开框选取字层：先抓整屏位图，再让用户框选，避免遮罩被拍进图片。
+    fn start_region_ocr(&mut self, ctx: &egui::Context) {
+        if self.capture_overlay.open {
+            return;
+        }
+        if self.ocr_rx.is_some() {
+            self.app.say("正在识别上一张图片，请稍候");
+            return;
+        }
+        // 框选层全屏覆盖，先收起其它浮层，避免识别后还挡着屏幕。
+        if self.clipboard_popup.open {
+            self.close_clipboard(false);
+        }
+        if self.command_palette.is_open() {
+            self.command_palette.close();
+        }
+        let Some(monitor) = daozai::region_capture::monitor_at_cursor() else {
+            self.app.say("没有找到可用显示器");
+            return;
+        };
+        match daozai::region_capture::capture_region(monitor) {
+            Ok(image) => {
+                self.capture_image = Some(image);
+                self.capture_monitor = Some(monitor);
+                self.capture_overlay.open(monitor);
+                ctx.request_repaint();
+            }
+            Err(error) => self.app.say(format!("无法截取屏幕：{error}")),
+        }
+    }
+
+    fn show_capture_overlay(&mut self, ctx: &egui::Context) {
+        use daozai::capture_ui::Action as CaptureAction;
+        if !self.capture_overlay.open {
+            return;
+        }
+        let ppp = ctx.pixels_per_point();
+        match self.capture_overlay.show(ctx, ppp) {
+            CaptureAction::None => {}
+            CaptureAction::Cancel => self.close_capture_overlay(),
+            CaptureAction::Capture { x, y, width, height } => {
+                self.capture_overlay.close();
+                let Some(image) = self.capture_image.take() else {
+                    self.capture_monitor = None;
+                    return;
+                };
+                self.capture_monitor = None;
+                match daozai::region_capture::crop(&image, x, y, width, height) {
+                    Ok(cropped) => self.start_ocr_image(ctx, cropped),
+                    Err(error) => self.app.say(error),
+                }
+            }
+        }
+    }
+
+    fn close_capture_overlay(&mut self) {
+        self.capture_overlay.close();
+        self.capture_image = None;
+        self.capture_monitor = None;
+    }
+
+    /// 对一段已经截好的 RGBA 图像跑 OCR（框选取字）。
+    fn start_ocr_image(&mut self, ctx: &egui::Context, image: daozai::ocr::Image) {
+        if self.ocr_rx.is_some() {
+            self.app.say("正在识别上一张图片，请稍候");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ocr_rx = Some(rx);
+        self.app.say("正在识别选区文字…");
+        ctx.request_repaint();
+        std::thread::Builder::new()
+            .name("daozai-ocr-region".into())
+            .spawn(move || {
+                let _ = tx.send(daozai::ocr::recognize_rgba(&image.rgba, image.width, image.height));
+            })
+            .ok();
     }
 
     /// 识别剪贴板图片里的文字：后台线程跑 Windows OCR，主线程只收结果。
@@ -473,6 +564,10 @@ impl Shell {
                 self.close_command_palette();
                 self.run_ocr(ctx);
             }
+            PaletteAction::CropOcr => {
+                self.close_command_palette();
+                self.start_region_ocr(ctx);
+            }
         }
     }
 
@@ -538,24 +633,33 @@ impl eframe::App for Shell {
         #[cfg(windows)]
         self.poll_tray(ctx);
         #[cfg(windows)]
-        if daozai::native::take_clipboard_hotkey() {
-            if self.clipboard_popup.open {
-                self.close_clipboard(true);
-            } else {
-                self.open_clipboard(ctx, true);
+        {
+            // 一次只消费一次热键；框选层打开期间不再响应其他浮层热键。
+            let screen_ocr = daozai::native::take_crop_hotkey();
+            let clipboard_hotkey = daozai::native::take_clipboard_hotkey();
+            let command_hotkey = daozai::native::take_command_hotkey();
+            let image_ocr = daozai::native::take_ocr_hotkey();
+            if screen_ocr {
+                self.start_region_ocr(ctx);
+            } else if !self.capture_overlay.open {
+                if clipboard_hotkey {
+                    if self.clipboard_popup.open {
+                        self.close_clipboard(true);
+                    } else {
+                        self.open_clipboard(ctx, true);
+                    }
+                }
+                if command_hotkey {
+                    if self.command_palette.is_open() {
+                        self.command_palette.close();
+                    } else {
+                        self.open_command_palette(ctx);
+                    }
+                }
+                if image_ocr {
+                    self.run_ocr(ctx);
+                }
             }
-        }
-        #[cfg(windows)]
-        if daozai::native::take_command_hotkey() {
-            if self.command_palette.is_open() {
-                self.command_palette.close();
-            } else {
-                self.open_command_palette(ctx);
-            }
-        }
-        #[cfg(windows)]
-        if daozai::native::take_ocr_hotkey() {
-            self.run_ocr(ctx);
         }
         self.poll_clipboard();
         self.poll_ocr(ctx);
@@ -729,9 +833,10 @@ impl eframe::App for Shell {
         self.app.mail_reader_ui(ctx);
         self.show_clipboard(ctx);
         self.show_command_palette(ctx);
+        self.show_capture_overlay(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open {
             Duration::from_millis(16)
         } else {
             repaint_after
