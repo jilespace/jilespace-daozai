@@ -47,6 +47,7 @@ const CMD_MINIMAL: u32 = 5;
 const CMD_SETTINGS:u32=6;
 const CMD_CLIPBOARD: u32 = 7;
 const CMD_COMMAND: u32 = 8;
+const CMD_OCR: u32 = 9;
 const TIMER_MENU: usize = 12;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
@@ -60,9 +61,9 @@ pub struct State {
     pub autostart: bool,
 }
 
-/// 菜单固定中文：启动 / 吉祥物 / 极简 / —— / 设置 / 剪贴板 / 命令面板 / 关于 / 退出。
-fn labels() -> [&'static str; 8] {
-    ["开机启动", "吉祥物", "极简刘海", "关于岛仔", "退出", "设置…", "剪贴板历史", "命令面板"]
+/// 菜单固定中文：启动 / 吉祥物 / 极简 / —— / 设置 / 剪贴板 / 识别图片 / 命令面板 / 关于 / 退出。
+fn labels() -> [&'static str; 9] {
+    ["开机启动", "吉祥物", "极简刘海", "关于岛仔", "退出", "设置…", "剪贴板历史", "命令面板", "识别图片文字"]
 }
 
 struct Ctx {
@@ -89,6 +90,7 @@ pub enum Event {
     ToggleAutostart,
     OpenClipboard,
     OpenCommandPalette,
+    OcrClipboard,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -199,6 +201,7 @@ fn popup_menu(state: State) -> windows::core::Result<HMENU> {
         append(MF_SEPARATOR, 0, PCWSTR::null());
         append(MF_STRING, CMD_SETTINGS, PCWSTR(wide[5].as_ptr()));
         append(MF_STRING, CMD_CLIPBOARD, PCWSTR(wide[6].as_ptr()));
+        append(MF_STRING, CMD_OCR, PCWSTR(wide[8].as_ptr()));
         append(MF_STRING, CMD_COMMAND, PCWSTR(wide[7].as_ptr()));
         append(MF_STRING, CMD_ABOUT, PCWSTR(wide[3].as_ptr()));
         append(MF_STRING, CMD_EXIT, PCWSTR(wide[4].as_ptr()));
@@ -296,6 +299,7 @@ fn show_menu_at(hwnd: HWND, ctx: &Ctx, x: i32, y: i32) {
             CMD_SETTINGS => {let _=ctx.tx.send(Event::OpenSettings);}
             CMD_CLIPBOARD => { let _ = ctx.tx.send(Event::OpenClipboard); }
             CMD_COMMAND => { let _ = ctx.tx.send(Event::OpenCommandPalette); }
+            CMD_OCR => { let _ = ctx.tx.send(Event::OcrClipboard); }
             CMD_ABOUT => about(),
             CMD_EXIT => {
                 // 原版：先摘图标，再结束进程
@@ -588,10 +592,10 @@ mod tests {
         ] {
             let menu = popup_menu(state).expect("创建菜单");
             let items = menu_items(menu);
-            assert_eq!(items.len(), 9, "8 项 + 1 分隔线");
+            assert_eq!(items.len(), 10, "9 项 + 1 分隔线");
             assert!(items[3].2, "第 4 项是分隔线");
             let texts: Vec<_> = items.iter().filter(|i| !i.2).map(|i| i.0.as_str()).collect();
-            assert_eq!(texts, ["开机启动", "吉祥物", "极简刘海", "设置…", "剪贴板历史", "命令面板", "关于岛仔", "退出"]);
+            assert_eq!(texts, ["开机启动", "吉祥物", "极简刘海", "设置…", "剪贴板历史", "识别图片文字", "命令面板", "关于岛仔", "退出"]);
             assert_eq!([items[0].1, items[1].1, items[2].1], want, "勾选态应与状态一致");
             unsafe {
                 let _ = DestroyMenu(menu);
@@ -601,7 +605,7 @@ mod tests {
 
     #[test]
     fn labels_are_fixed_chinese() {
-        assert_eq!(labels(), ["开机启动", "吉祥物", "极简刘海", "关于岛仔", "退出", "设置…", "剪贴板历史", "命令面板"]);
+        assert_eq!(labels(), ["开机启动", "吉祥物", "极简刘海", "关于岛仔", "退出", "设置…", "剪贴板历史", "命令面板", "识别图片文字"]);
     }
 
     #[test]
@@ -620,8 +624,8 @@ mod tests {
     #[test]
     fn menu_ids_match_original() {
         assert_eq!(
-            [CMD_EXIT, CMD_START, CMD_MASCOT, CMD_ABOUT, CMD_MINIMAL, CMD_CLIPBOARD, CMD_COMMAND],
-            [1, 2, 3, 4, 5, 7, 8]
+            [CMD_EXIT, CMD_START, CMD_MASCOT, CMD_ABOUT, CMD_MINIMAL, CMD_CLIPBOARD, CMD_COMMAND, CMD_OCR],
+            [1, 2, 3, 4, 5, 7, 8, 9]
         );
     }
 }

@@ -42,6 +42,7 @@ pub enum Action {
     SetClipboardPaused(bool),
     SetClipboardEnabled(bool),
     ToggleFocus,
+    OcrClipboard,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -101,6 +102,7 @@ enum Glyph {
     Gear,
     App,
     Calc,
+    Scan,
 }
 
 #[derive(Clone)]
@@ -284,6 +286,14 @@ impl Panel {
                 Action::ToggleFocus,
             ));
         }
+        entries.push(action(
+            "action-ocr",
+            "识别剪贴板图片文字",
+            "读取剪贴板里的图片，用 Windows 本地 OCR 识别文字",
+            "OCR 图片 文字 识别 截图 提取 image text extract clipboard",
+            Glyph::Scan,
+            Action::OcrClipboard,
+        ));
         entries.push(action(
             "action-calendar",
             "打开日程",
@@ -975,6 +985,16 @@ fn draw_glyph(painter: &egui::Painter, rect: Rect, entry: &Entry, color: Color32
         }
         Glyph::Calc => {
             painter.text(center, egui::Align2::CENTER_CENTER, "=", theme::font(15.0, W::Semibold), color);
+        }
+        Glyph::Scan => {
+            // 取景框四角 + 两行文字，表示「截取图片里的文字」。
+            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                let corner = center + Vec2::new(sx * 7.0, sy * 7.0);
+                painter.line_segment([corner, corner - Vec2::new(sx * 4.0, 0.0)], Stroke::new(1.4_f32, color));
+                painter.line_segment([corner, corner - Vec2::new(0.0, sy * 4.0)], Stroke::new(1.4_f32, color));
+            }
+            painter.line_segment([center + Vec2::new(-3.0, -1.5), center + Vec2::new(3.0, -1.5)], Stroke::new(1.3_f32, color));
+            painter.line_segment([center + Vec2::new(-3.0, 2.0), center + Vec2::new(1.0, 2.0)], Stroke::new(1.3_f32, color));
         }
         Glyph::App => {
             let monogram: String = entry
@@ -1730,6 +1750,17 @@ mod tests {
     }
 
     #[test]
+    fn ocr_action_is_searchable_from_the_commands() {
+        for query in ["ocr", "识别", "图片"] {
+            let palette = palette_for_test(query);
+            assert!(
+                palette.results.iter().any(|entry| entry.action == Action::OcrClipboard),
+                "查询 {query} 应找到图片文字识别"
+            );
+        }
+    }
+
+    #[test]
     fn builtin_system_tools_are_searchable_while_typing() {
         let palette = palette_for_test("记事本");
         assert!(!palette.results.is_empty());
@@ -1883,7 +1914,7 @@ mod tests {
         let mut palette = palette_for_test("");
         let dark = render_palette(&mut palette, true);
         assert_inside(&dark, "深色列表");
-        for expected in ["命令面板", "Ctrl+Alt+K", "打开剪贴板历史", "操作", "页面", "设置", "选择", "执行"] {
+        for expected in ["命令面板", "Ctrl+Alt+K", "打开剪贴板历史", "识别剪贴板图片文字", "操作", "页面", "设置", "选择", "执行"] {
             assert!(contains(&dark.shapes, expected), "缺少关键元素：{expected}");
         }
         let light = render_palette(&mut palette, false);

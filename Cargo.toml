@@ -82,6 +82,7 @@ windows = { version = "0.58", features = [
   "UI_Notifications", "ApplicationModel",
   "Win32_System_Ole", "Win32_UI_Shell_Common", "Networking_Connectivity",
   "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis",
+  "Media_Ocr", "Graphics_Imaging", "Security_Cryptography",
   "Win32_Devices_DeviceAndDriverInstallation",
   "Win32_Devices_Properties",
   "Win32_Devices_Bluetooth",

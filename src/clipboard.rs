@@ -491,6 +491,8 @@ pub enum Cmd {
     Delete(String),
     Restore(Item),
     Pin(String, bool),
+    /// 外部识别/生成的结果直接插入历史（不写系统剪贴板）。
+    Insert(String),
     Clear,
     Refresh,
 }
@@ -579,6 +581,11 @@ impl Service {
 
     pub fn pin(&self, id: &str, pinned: bool) {
         let _ = self.cmd.send(Cmd::Pin(id.into(), pinned));
+    }
+
+    /// 把一段外部结果（例如 OCR 文字）加入历史。
+    pub fn insert(&self, text: String) {
+        let _ = self.cmd.send(Cmd::Insert(text));
     }
 
     pub fn clear(&self) {
@@ -677,6 +684,14 @@ fn supervisor(
                 let _ = events.send(Event::Changed(std::sync::Arc::new(
                     history.items().to_vec(),
                 )));
+            }
+            Ok(Cmd::Insert(text)) => {
+                if history.insert(text, now_seconds()) {
+                    if let Err(error) = save(&history) {
+                        let _ = events.send(Event::Status(error));
+                    }
+                }
+                let _ = events.send(Event::Changed(std::sync::Arc::new(history.items().to_vec())));
             }
             Ok(Cmd::Clear) => {
                 history.clear();
@@ -1042,6 +1057,25 @@ mod tests {
             capture.written.lock().unwrap().as_slice(),
             ["from another app"]
         );
+    }
+
+    #[test]
+    fn insert_command_adds_external_text_to_history() {
+        let _dir = test_history_dir();
+        let capture = Arc::new(FakeCapture::new());
+        let service = Service::start_with(capture.clone());
+        service.set_enabled(true);
+        let _ = next_event(&service, Duration::from_secs(1));
+        service.insert("OCR 识别出来的一段文字".into());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Event::Changed(items) = next_event(&service, Duration::from_millis(600)) {
+                if items.iter().any(|item| item.text == "OCR 识别出来的一段文字") {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "外部插入的文本应出现在历史里");
+        }
     }
 
     #[test]

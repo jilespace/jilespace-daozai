@@ -58,6 +58,8 @@ struct Shell {
     clipboard_prev: Option<windows::Win32::Foundation::HWND>,
     clipboard_transfer: Option<(String, bool)>,
     clipboard_status: String,
+    /// 剪贴板图片 OCR 的后台结果。
+    ocr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     command_palette: daozai::command_palette::Panel,
     /// 系统页采样器与最近一次结果。
     perf: daozai::perf::Sampler,
@@ -141,6 +143,7 @@ impl Shell {
             clipboard_prev: None,
             clipboard_transfer: None,
             clipboard_status: String::new(),
+            ocr_rx: None,
             command_palette: daozai::command_palette::Panel::default(),
             perf: daozai::perf::Sampler::new(),
             perf_at: PollClock::default(),
@@ -158,6 +161,7 @@ impl Shell {
                 Event::OpenCalendar=>self.app.open_calendar(None),
                 Event::OpenClipboard=>self.open_clipboard(ctx, false),
                 Event::OpenCommandPalette=>self.open_command_palette(ctx),
+                Event::OcrClipboard=>self.run_ocr(ctx),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -322,6 +326,10 @@ impl Shell {
                 );
             }
             daozai::clipboard_ui::Action::Clear => self.clipboard.clear(),
+            daozai::clipboard_ui::Action::OcrClipboard => {
+                self.close_clipboard(false);
+                self.run_ocr(ctx);
+            }
             daozai::clipboard_ui::Action::OpenSettings => {
                 self.close_clipboard(false);
                 self.app.open_settings();
@@ -338,6 +346,51 @@ impl Shell {
         self.clipboard_popup.clear_error();
         self.clipboard_transfer = Some((id.clone(), paste));
         self.clipboard.copy(&id);
+    }
+
+    /// 识别剪贴板图片里的文字：后台线程跑 Windows OCR，主线程只收结果。
+    fn run_ocr(&mut self, ctx: &egui::Context) {
+        if self.ocr_rx.is_some() {
+            self.app.say("正在识别上一张图片，请稍候");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.ocr_rx = Some(rx);
+        self.app.say("正在识别剪贴板图片…");
+        ctx.request_repaint();
+        std::thread::Builder::new()
+            .name("daozai-ocr".into())
+            .spawn(move || {
+                let _ = tx.send(daozai::ocr::recognize_clipboard());
+            })
+            .ok();
+    }
+
+    fn poll_ocr(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.ocr_rx else { return };
+        let mut finished = None;
+        match rx.try_recv() {
+            Ok(result) => finished = Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                finished = Some(Err("识别线程已退出".into()))
+            }
+        }
+        let Some(result) = finished else { return };
+        self.ocr_rx = None;
+        match result {
+            Ok(text) => {
+                let count = text.chars().filter(|ch| !ch.is_whitespace()).count();
+                if count == 0 {
+                    self.app.say("没有识别到文字");
+                    return;
+                }
+                ctx.copy_text(text.clone());
+                self.clipboard.insert(text);
+                self.app.say(format!("已识别 {count} 个字，已复制到剪贴板"));
+            }
+            Err(message) => self.app.say(message),
+        }
     }
 
     fn open_command_palette(&mut self, ctx: &egui::Context) {
@@ -415,6 +468,10 @@ impl Shell {
             PaletteAction::ToggleFocus => {
                 self.close_command_palette();
                 self.app.toggle_focus();
+            }
+            PaletteAction::OcrClipboard => {
+                self.close_command_palette();
+                self.run_ocr(ctx);
             }
         }
     }
@@ -496,7 +553,12 @@ impl eframe::App for Shell {
                 self.open_command_palette(ctx);
             }
         }
+        #[cfg(windows)]
+        if daozai::native::take_ocr_hotkey() {
+            self.run_ocr(ctx);
+        }
         self.poll_clipboard();
+        self.poll_ocr(ctx);
         #[cfg(windows)]
         if daozai::native::take_foreground_change() {
             // 切到别的程序：收起，并在光标离开前不再自动展开

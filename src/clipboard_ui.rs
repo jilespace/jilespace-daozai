@@ -37,6 +37,7 @@ pub enum Action {
     SetPaused(bool),
     Clear,
     OpenSettings,
+    OcrClipboard,
     Close { restore: bool },
 }
 
@@ -534,6 +535,10 @@ impl Popup {
                         }
                         if ui.button("清空全部…").clicked() {
                             confirm_clear = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("识别图片文字…").clicked() {
+                            action = Action::OcrClipboard;
                             ui.close_menu();
                         }
                         ui.separator();
