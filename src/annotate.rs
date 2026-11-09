@@ -15,6 +15,7 @@ pub enum Tool {
     Pen,
     Rect,
     Arrow,
+    Text,
 }
 
 impl Tool {
@@ -23,25 +24,30 @@ impl Tool {
             Self::Pen => "画笔",
             Self::Rect => "矩形",
             Self::Arrow => "箭头",
+            Self::Text => "文字",
         }
     }
 }
 
 pub const COLORS: [[u8; 3]; 5] = [[255, 69, 58], [255, 214, 10], [10, 132, 255], [255, 255, 255], [20, 20, 22]];
 pub const WIDTHS: [f32; 3] = [3.0, 6.0, 11.0];
+/// 文字工具的字号（像素），与线宽档位共用三个位置。
+pub const TEXT_SIZES: [f32; 3] = [20.0, 30.0, 42.0];
 
 #[derive(Clone, Debug)]
 pub struct Shape {
     pub tool: Tool,
     pub color: [u8; 3],
     pub width: f32,
-    /// 画笔是连续轨迹，矩形/箭头只取首尾两点。
+    /// 画笔是连续轨迹，矩形/箭头只取首尾两点，文字点表示左上角。
     pub points: Vec<(f32, f32)>,
+    /// 文字工具的内容。
+    pub text: Option<String>,
 }
 
 impl Shape {
     fn new(tool: Tool, color: [u8; 3], width: f32, point: (f32, f32)) -> Self {
-        Self { tool, color, width, points: vec![point] }
+        Self { tool, color, width, points: vec![point], text: None }
     }
 }
 
@@ -117,9 +123,119 @@ pub fn rasterize(base: &Image, shapes: &[Shape]) -> Image {
                     }
                 }
             }
+            Tool::Text => {
+                if let (Some(start), Some(text)) = (shape.points.first(), shape.text.as_deref()) {
+                    if let Some(glyphs) = text_bitmap(text, shape.width, shape.color) {
+                        blend_bitmap(&mut out, *start, &glyphs);
+                    }
+                }
+            }
         }
     }
     out
+}
+
+/// 把一张带 alpha 的小图叠加到目标图左上角坐标处。
+fn blend_bitmap(target: &mut Image, at: (f32, f32), glyphs: &Image) {
+    let left = at.0.round() as i32;
+    let top = at.1.round() as i32;
+    for y in 0..glyphs.height as i32 {
+        for x in 0..glyphs.width as i32 {
+            let index = ((y as u32 * glyphs.width + x as u32) * 4) as usize;
+            let alpha = glyphs.rgba[index + 3] as f32 / 255.0;
+            if alpha <= 0.0 {
+                continue;
+            }
+            let color = [glyphs.rgba[index], glyphs.rgba[index + 1], glyphs.rgba[index + 2]];
+            blend(target, left + x, top + y, color, alpha);
+        }
+    }
+}
+
+/// 用 GDI 把文字渲染成「选定颜色 + 抗锯齿 alpha」的小图；无 Windows 时返回 None。
+#[cfg(windows)]
+fn text_bitmap(text: &str, font_px: f32, color: [u8; 3]) -> Option<Image> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GetTextExtentPoint32W,
+        SelectObject, SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS, TRANSPARENT,
+    };
+    use windows::Win32::Foundation::{COLORREF, SIZE};
+    let text: Vec<u16> = text.encode_utf16().collect();
+    if text.is_empty() {
+        return None;
+    }
+    unsafe {
+        let dc = CreateCompatibleDC(None);
+        let font = CreateFontW(
+            -(font_px.max(8.0) as i32),
+            0,
+            0,
+            0,
+            600,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            4,
+            0,
+            PCWSTR("Microsoft YaHei UI\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
+        );
+        let old_font = SelectObject(dc, font);
+        let mut size = SIZE::default();
+        let _ = GetTextExtentPoint32W(dc, &text, &mut size);
+        let width = (size.cx.max(1) + 6) as u32;
+        let height = (size.cy.max(1) + 6) as u32;
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let Ok(bitmap) = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            let _ = SelectObject(dc, old_font);
+            let _ = DeleteObject(font);
+            let _ = DeleteDC(dc);
+            return None;
+        };
+        let old_bitmap = SelectObject(dc, bitmap);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, COLORREF(0x00FF_FFFF));
+        let _ = TextOutW(dc, 3, 3, &text);
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        if !bits.is_null() {
+            let source = std::slice::from_raw_parts(bits as *const u8, rgba.len());
+            for index in (0..rgba.len()).step_by(4) {
+                let blue = source[index];
+                let green = source[index + 1];
+                let red = source[index + 2];
+                let alpha = red.max(green).max(blue);
+                rgba[index] = color[0];
+                rgba[index + 1] = color[1];
+                rgba[index + 2] = color[2];
+                rgba[index + 3] = alpha;
+            }
+        }
+        SelectObject(dc, old_bitmap);
+        let _ = DeleteObject(bitmap);
+        SelectObject(dc, old_font);
+        let _ = DeleteObject(font);
+        let _ = DeleteDC(dc);
+        Some(Image { width, height, rgba })
+    }
+}
+
+#[cfg(not(windows))]
+fn text_bitmap(_text: &str, _font_px: f32, _color: [u8; 3]) -> Option<Image> {
+    None
 }
 
 fn ends(shape: &Shape) -> Option<((f32, f32), (f32, f32))> {
@@ -206,6 +322,7 @@ fn extend(shape: &mut Shape, point: (f32, f32)) {
                 shape.points[1] = point;
             }
         }
+        Tool::Text => {}
     }
 }
 
@@ -230,6 +347,9 @@ pub struct Editor {
     had_focus: bool,
     scale: f32,
     status: String,
+    /// 文字工具待放置的位置、内容和是否需要聚焦输入框。
+    text_pending: Option<(f32, f32, String)>,
+    text_focus: bool,
 }
 
 impl Default for Editor {
@@ -248,6 +368,8 @@ impl Default for Editor {
             had_focus: false,
             scale: 1.0,
             status: String::new(),
+            text_pending: None,
+            text_focus: false,
         }
     }
 }
@@ -268,6 +390,8 @@ impl Editor {
         self.base = Some(image);
         self.shapes.clear();
         self.draft = None;
+        self.text_pending = None;
+        self.text_focus = false;
         self.status.clear();
         self.open = true;
         self.shown = false;
@@ -282,6 +406,8 @@ impl Editor {
         self.base = None;
         self.shapes.clear();
         self.draft = None;
+        self.text_pending = None;
+        self.text_focus = false;
     }
 
     fn window_size(&self) -> Vec2 {
@@ -337,7 +463,11 @@ impl Editor {
                 action = Action::Close;
             }
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                action = Action::Close;
+                if self.text_pending.is_some() {
+                    self.text_pending = None;
+                } else {
+                    action = Action::Close;
+                }
             }
             if ctx.input(|input| input.key_pressed(egui::Key::Z) && input.modifiers.command) {
                 self.shapes.pop();
@@ -386,6 +516,10 @@ impl Editor {
                         let canvas = self.canvas(ui);
                         if let Some(canvas) = canvas {
                             self.draw_canvas(ui, canvas, &palette);
+                            if self.text_pending.is_some() {
+                                let ctx = ui.ctx().clone();
+                                self.text_input(&ctx, ui, canvas, &palette);
+                            }
                         }
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -415,7 +549,7 @@ impl Editor {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("截图标注").size(15.0).strong().color(palette.text));
             ui.add_space(6.0);
-            for tool in [Tool::Pen, Tool::Rect, Tool::Arrow] {
+            for tool in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text] {
                 let selected = self.tool == tool;
                 let response = ui.add(
                     egui::Button::new(
@@ -444,7 +578,8 @@ impl Editor {
                 }
             }
             ui.add_space(6.0);
-            for (index, label) in ["细", "中", "粗"].iter().enumerate() {
+            let width_labels = if self.tool == Tool::Text { ["小", "中", "大"] } else { ["细", "中", "粗"] };
+            for (index, label) in width_labels.iter().enumerate() {
                 let selected = self.width == index;
                 let response = ui.add(
                     egui::Button::new(
@@ -512,6 +647,16 @@ impl Editor {
                 ((point.y - canvas.top()) / self.scale).clamp(0.0, base.height.saturating_sub(1) as f32),
             )
         };
+        if self.tool == Tool::Text {
+            if response.clicked() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let position = to_image(pointer);
+                    self.text_pending = Some((position.0, position.1, String::new()));
+                    self.text_focus = true;
+                }
+            }
+            return;
+        }
         if response.drag_started() {
             if let Some(pointer) = response.interact_pointer_pos() {
                 self.draft = Some(Shape::new(
@@ -532,6 +677,62 @@ impl Editor {
                 if shape.points.len() >= 2 || shape.tool == Tool::Pen {
                     self.shapes.push(shape);
                 }
+            }
+        }
+    }
+
+    fn text_input(&mut self, ctx: &egui::Context, _ui: &mut egui::Ui, canvas: Rect, palette: &crate::panel::Palette) {
+        let Some((x, y, text)) = self.text_pending.as_mut() else { return };
+        let position = egui::pos2(canvas.left() + *x * self.scale, canvas.top() + *y * self.scale);
+        let mut focus = self.text_focus;
+        egui::Area::new(egui::Id::new("annotate-text-input"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(palette.raised)
+                    .stroke(Stroke::new(1.0_f32, palette.accent))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(8, 5))
+                    .shadow(crate::panel::shadow(true))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let response = ui.add(
+                                egui::TextEdit::singleline(text)
+                                    .hint_text("输入文字，Enter 放置")
+                                    .desired_width(190.0)
+                                    .font(egui::FontId::proportional(13.0)),
+                            );
+                            if focus {
+                                response.request_focus();
+                                focus = false;
+                            }
+                            ui.label(egui::RichText::new("Enter").size(9.0).color(palette.faint));
+                        });
+                    });
+            });
+        self.text_focus = focus;
+        let (enter, escape) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::Enter),
+                input.key_pressed(egui::Key::Escape),
+            )
+        });
+        if escape {
+            self.text_pending = None;
+            return;
+        }
+        if enter {
+            let Some((x, y, text)) = self.text_pending.take() else { return };
+            let content = text.trim().to_string();
+            if !content.is_empty() {
+                self.shapes.push(Shape {
+                    tool: Tool::Text,
+                    color: COLORS[self.color],
+                    width: TEXT_SIZES[self.width],
+                    points: vec![(x, y)],
+                    text: Some(content),
+                });
             }
         }
     }
@@ -573,6 +774,17 @@ impl Editor {
                     }
                 }
             }
+            Tool::Text => {
+                if let (Some(start), Some(text)) = (shape.points.first(), shape.text.as_deref()) {
+                    ui.painter().text(
+                        map(*start),
+                        egui::Align2::LEFT_TOP,
+                        text,
+                        egui::FontId::proportional((shape.width * self.scale).max(8.0)),
+                        color,
+                    );
+                }
+            }
         }
     }
 }
@@ -594,8 +806,8 @@ mod tests {
     fn pen_and_rect_change_pixels_and_keep_size() {
         let base = image(60, 40);
         let shapes = vec![
-            Shape { tool: Tool::Pen, color: [255, 0, 0], width: 4.0, points: vec![(5.0, 5.0), (40.0, 20.0)] },
-            Shape { tool: Tool::Rect, color: [0, 255, 0], width: 3.0, points: vec![(10.0, 25.0), (50.0, 35.0)] },
+            Shape { tool: Tool::Pen, color: [255, 0, 0], width: 4.0, points: vec![(5.0, 5.0), (40.0, 20.0)], text: None },
+            Shape { tool: Tool::Rect, color: [0, 255, 0], width: 3.0, points: vec![(10.0, 25.0), (50.0, 35.0)], text: None },
         ];
         let out = rasterize(&base, &shapes);
         assert_eq!((out.width, out.height), (60, 40));
@@ -612,6 +824,7 @@ mod tests {
             color: [10, 132, 255],
             width: 2.0,
             points: vec![(2.0, 2.0), (80.0, 60.0)],
+            text: None,
         }];
         let out = rasterize(&base, &shapes);
         // 起点一定被画到；出界点被裁掉而不是 panic。
@@ -630,6 +843,35 @@ mod tests {
         extend(&mut rect, (5.0, 5.0));
         extend(&mut rect, (9.0, 9.0));
         assert_eq!(rect.points, vec![(1.0, 1.0), (9.0, 9.0)]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gdi_text_bitmaps_have_antialiased_alpha() {
+        let glyphs = text_bitmap("测试A", 30.0, [255, 69, 58]).expect("GDI 文字渲染应成功");
+        assert!(glyphs.width > 20 && glyphs.height > 10);
+        let opaque = glyphs.rgba.chunks_exact(4).filter(|pixel| pixel[3] > 180).count();
+        assert!(opaque > 8, "文字应产生不透明像素，实际 {opaque}");
+        assert!(glyphs.rgba.chunks_exact(4).any(|pixel| pixel[3] > 0 && pixel[0] == 255 && pixel[1] == 69));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn text_shapes_export_into_the_image() {
+        let base = image(240, 100);
+        let shapes = vec![Shape {
+            tool: Tool::Text,
+            color: [255, 0, 0],
+            width: 30.0,
+            points: vec![(12.0, 16.0)],
+            text: Some("Hello 岛仔".into()),
+        }];
+        let out = rasterize(&base, &shapes);
+        let red = out
+            .rgba
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] > 200 && pixel[1] < 80 && pixel[2] < 80);
+        assert!(red, "文字应被合成进导出的截图");
     }
 
     #[test]
@@ -669,12 +911,21 @@ mod tests {
             color: [255, 69, 58],
             width: 6.0,
             points: vec![(80.0, 90.0), (320.0, 200.0)],
+            text: None,
+        });
+        editor.shapes.push(Shape {
+            tool: Tool::Text,
+            color: [255, 255, 255],
+            width: TEXT_SIZES[1],
+            points: vec![(64.0, 214.0)],
+            text: Some("岛仔截图".into()),
         });
         editor.shapes.push(Shape {
             tool: Tool::Rect,
             color: [10, 132, 255],
             width: 3.0,
             points: vec![(60.0, 40.0), (240.0, 150.0)],
+            text: None,
         });
         let size = editor.window_size();
         let raw = egui::RawInput {
@@ -705,7 +956,7 @@ mod tests {
         for clipped in &output.shapes {
             collect(&clipped.shape, &mut texts);
         }
-        for expected in ["截图标注", "画笔", "矩形", "箭头", "撤销", "复制", "保存"] {
+        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "撤销", "复制", "保存"] {
             assert!(texts.iter().any(|text| text.galley.text().contains(expected)), "编辑器缺少 {expected}");
         }
         if let Some(dest) = std::env::var_os("DAOZAI_ANNOTATE_PREVIEW_DIR").filter(|value| !value.is_empty()) {
