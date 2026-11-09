@@ -48,6 +48,8 @@ struct Shell {
     /// v0.5.6：日程（CalDAV）服务与上次下发的配置。
     cal: daozai::calendar::Service,
     cal_sig: (Vec<daozai::calendar::Config>, bool),
+    weather: daozai::weather::Service,
+    weather_sig: (bool, String, u32),
     quota: daozai::quota::Service,
     quota_sig: Option<(bool,Vec<daozai::quota::Account>)>,
     quota_at: PollClock,
@@ -146,6 +148,8 @@ impl Shell {
             mail_sig: (false, 0, Vec::new()),
             cal: daozai::calendar::Service::start(),
             cal_sig: (Vec::new(), true),
+            weather: daozai::weather::Service::start(),
+            weather_sig: (false, String::new(), 0),
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
             clipboard,
             clipboard_popup: daozai::clipboard_ui::Popup::default(),
@@ -591,6 +595,11 @@ impl Shell {
                 self.app.reset_timer();
                 self.app.say("计时已重置");
             }
+            PaletteAction::RefreshWeather => {
+                self.close_command_palette();
+                self.app.request_weather_refresh();
+                self.app.say("正在刷新天气…");
+            }
             PaletteAction::SetStayAwake(awake) => {
                 self.close_command_palette();
                 self.app.settings.stay_awake = awake;
@@ -763,6 +772,12 @@ impl eframe::App for Shell {
             self.cal_sig=(cal,auto_sync);
         }
         while let Some(ev)=self.cal.try_recv(){self.app.calendar_event(ev);}
+        let weather_cfg=(self.app.settings.weather_enabled,self.app.settings.weather_city.clone(),self.app.settings.weather_refresh_minutes);
+        if weather_cfg!=self.weather_sig {
+            self.weather.configure(weather_cfg.0,weather_cfg.1.clone(),weather_cfg.2);
+            self.weather_sig=weather_cfg;
+        }
+        while let Some(event)=self.weather.try_recv(){self.app.weather_event(event);}
         #[cfg(feature="record")] let quota_demo=std::env::var("DAOZAI_QUOTA_DEMO").is_ok();
         #[cfg(not(feature="record"))] let quota_demo=false;
         if !quota_demo {
@@ -858,6 +873,7 @@ impl eframe::App for Shell {
                 },
                 Cmd::Focus => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
                 Cmd::ClipboardClear => self.clipboard.clear(),
+                Cmd::WeatherRefresh => self.weather.refresh(),
             }
         }
 

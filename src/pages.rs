@@ -942,6 +942,127 @@ impl App {
             self.pending.push(Cmd::Open(std::path::PathBuf::from("shell:MyComputerFolder")));
         }
     }
+    // ================= 天气 =================
+    pub(crate) fn page_weather(&mut self, c: &Card) {
+        let enabled = self.settings.weather_enabled;
+        let loading = self.weather.loading;
+        let error = self.weather.error.clone();
+        let current = self.weather.current.clone();
+        if !enabled {
+            c.text(209.0, 62.0, "天气未开启", 14.0, W::Bold, theme::WHITE, H::Center);
+            c.text(209.0, 80.0, "在「设置 → 天气」填写城市并开启", 10.5, W::Regular, theme::GRAY, H::Center);
+            let button = crate::paint::capsule(c, 146.0, 94.0, 126.0, 24.0, "weather-enable", paint::mix(theme::CARD, theme::BLUE, 0.28), paint::mix(theme::CARD, theme::BLUE, 0.40));
+            button.1.text(209.0, 110.0, "打开天气设置", 10.5, W::Semibold, paint::mix(theme::BLUE, theme::WHITE, 0.55), H::Center);
+            if button.0.clicked() {
+                self.settings_tab = 14;
+                self.open_settings();
+            }
+            return;
+        }
+        if let Some(weather) = current.as_ref() {
+            self.draw_weather(c, weather, loading, error.as_deref());
+        } else if loading {
+            let pulse = 0.35 + 0.30 * ((self.t * 2.2).sin() as f32).abs();
+            let ink = Color32::from_white_alpha((18.0 + 46.0 * pulse) as u8);
+            c.fill(44.0, 42.0, 100.0, 16.0, 8.0, ink);
+            c.fill(44.0, 68.0, 146.0, 28.0, 10.0, ink);
+            c.fill(44.0, 108.0, 170.0, 10.0, 5.0, ink);
+            c.fill(208.0, 32.0, 167.0, 78.0, 9.0, theme::CARD);
+            c.text(209.0, 82.0, "正在获取天气…", 10.5, W::Regular, theme::GRAY, H::Center);
+        } else {
+            c.text(209.0, 56.0, "天气暂时不可用", 14.0, W::Bold, theme::WHITE, H::Center);
+            let lines = c.wrap(error.as_deref().unwrap_or("请检查网络后重试"), 9.5, W::Regular, 320.0, 2);
+            for (index, line) in lines.iter().enumerate() {
+                c.text(209.0, 76.0 + index as f32 * 14.0, line, 9.5, W::Regular, theme::GRAY, H::Center);
+            }
+            c.text(209.0, 112.0, "点击重试", 10.5, W::Semibold, theme::BLUE, H::Center);
+            if c.hit(60.0, 36.0, 300.0, 88.0, "weather-retry").clicked() {
+                self.request_weather_refresh();
+            }
+        }
+    }
+
+    fn draw_weather(&mut self, c: &Card, w: &crate::weather::Weather, loading: bool, error: Option<&str>) {
+        let kind = w.kind();
+        let accent = match kind {
+            crate::weather::Kind::Sun | crate::weather::Kind::Partly => theme::YELLOW,
+            crate::weather::Kind::Rain => theme::BLUE,
+            crate::weather::Kind::Snow => theme::CYAN,
+            crate::weather::Kind::Thunder => theme::YELLOW,
+            crate::weather::Kind::Fog => Color32::from_gray(175),
+            crate::weather::Kind::Cloud => Color32::from_gray(205),
+        };
+        // 逐小时卡片的底色先画，随后左侧文字与卡片列都盖在上面。
+        if !w.hourly.is_empty() {
+            c.fill(208.0, 32.0, 167.0, 78.0, 9.0, theme::CARD);
+        }
+        c.glow(74.0, 64.0, 88.0, paint::alpha(accent, 0.10));
+        weather_glyph(c, 74.0, 62.0, 37.0, kind, w.is_day, (self.t * 0.5) as f32);
+        c.text(110.0, 76.0, &format!("{}°", w.temperature.round() as i32), 31.0, W::Bold, theme::WHITE, H::Left);
+        let range = match (w.high, w.low) {
+            (Some(high), Some(low)) => format!("{} · {}° / {}°", w.label(), high.round() as i32, low.round() as i32),
+            _ => w.label().to_string(),
+        };
+        c.text(110.0, 93.0, &range, 11.5, W::Semibold, accent, H::Left);
+        let updated = chrono::DateTime::from_timestamp(w.updated_at, 0)
+            .map(|time| time.with_timezone(&chrono::Local).format("%H:%M").to_string())
+            .unwrap_or_default();
+        let status = if loading {
+            format!("{} · {} 更新中…", w.city, updated)
+        } else if error.is_some() {
+            format!("{} · {} 上次数据", w.city, updated)
+        } else {
+            format!("{} · {} 更新", w.city, updated)
+        };
+        c.text(44.0, 109.0, &c.fit(&status, 9.5, W::Regular, 160.0), 9.5, W::Regular, Color32::from_gray(155), H::Left);
+        let mut meta = Vec::new();
+        if let Some(humidity) = w.humidity {
+            meta.push(format!("湿度 {humidity}%"));
+        }
+        if let Some(wind) = w.wind_kmh {
+            meta.push(format!("风 {:.0} km/h", wind));
+        }
+        if let Some(apparent) = w.apparent {
+            meta.push(format!("体感 {}°", apparent.round() as i32));
+        }
+        c.text(44.0, 122.0, &c.fit(&meta.join(" · "), 9.0, W::Regular, 160.0), 9.0, W::Regular, Color32::from_gray(125), H::Left);
+        // 左侧整块可点击刷新。
+        if c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text("点击刷新天气").clicked() {
+            self.request_weather_refresh();
+        }
+        if !w.hourly.is_empty() {
+            let card = c.hit(208.0, 32.0, 167.0, 78.0, "weather-hourly");
+            match error {
+                Some(error) => {
+                    card.on_hover_text(format!("更新失败：{error}\n当前显示上次成功获取的数据"));
+                    c.circle(368.0, 38.0, 2.0, Color32::from_rgb(226, 176, 96));
+                }
+                None => {
+                    card.on_hover_text("逐小时预报 · 点击左侧可刷新");
+                }
+            }
+            let columns = w.hourly.len().min(6);
+            let width = 167.0 / columns as f32;
+            for (index, hour) in w.hourly.iter().take(6).enumerate() {
+                let cx = 208.0 + width * (index as f32 + 0.5);
+                c.text(cx, 45.0, &hour.label, 7.6, W::Regular, Color32::from_gray(160), H::Center);
+                let hour_kind = crate::weather::kind(hour.code);
+                let hour_color = match hour_kind {
+                    crate::weather::Kind::Sun | crate::weather::Kind::Partly => theme::YELLOW,
+                    crate::weather::Kind::Rain => theme::BLUE,
+                    crate::weather::Kind::Snow => theme::CYAN,
+                    crate::weather::Kind::Thunder => theme::YELLOW,
+                    crate::weather::Kind::Fog => Color32::from_gray(175),
+                    crate::weather::Kind::Cloud => Color32::from_gray(200),
+                };
+                weather_glyph(c, cx, 60.0, 17.0, hour_kind, true, (self.t * 0.5) as f32);
+                c.text(cx, 77.0, &format!("{}°", hour.temperature.round() as i32), 9.5, W::Semibold, theme::WHITE, H::Center);
+                if let Some(chance) = hour.precip_chance.filter(|chance| *chance > 0) {
+                    c.text(cx, 89.0, &format!("{chance}%"), 7.6, W::Regular, paint::alpha(hour_color, 0.9), H::Center);
+                }
+            }
+        }
+    }
     // ================= 计时（倒计时 / 秒表） =================
     pub(crate) fn page_timer(&mut self, c: &Card) {
         let running = self.timer.running;
@@ -1097,6 +1218,83 @@ impl App {
                     }
                 }
             }
+        }
+    }
+}
+
+/// 天气图标：太阳/云/雨雪/雷暴共用简单的矢量形状，太阳光线随时间缓慢转动。
+fn weather_glyph(c: &Card, cx: f32, cy: f32, size: f32, kind: crate::weather::Kind, is_day: bool, phase: f32) {
+    use crate::weather::Kind;
+    let sun = theme::YELLOW;
+    let cloud = Color32::from_gray(212);
+    let draw_sun = |x: f32, y: f32, r: f32, rays: bool| {
+        if rays && is_day {
+            for index in 0..8 {
+                let angle = TAU * index as f32 / 8.0 + phase * 0.4;
+                let direction = (angle.cos(), angle.sin());
+                c.seg(
+                    (x + direction.0 * r * 1.30, y + direction.1 * r * 1.30),
+                    (x + direction.0 * r * 1.75, y + direction.1 * r * 1.75),
+                    1.6,
+                    sun,
+                );
+            }
+        }
+        c.circle(x, y, r, sun);
+    };
+    let cloud_at = |x: f32, y: f32, scale: f32| {
+        let s = size * scale;
+        c.circle(x - s * 0.22, y + s * 0.02, s * 0.20, cloud);
+        c.circle(x + s * 0.02, y - s * 0.10, s * 0.25, cloud);
+        c.circle(x + s * 0.26, y + s * 0.03, s * 0.18, cloud);
+        c.fill(x - s * 0.40, y + s * 0.02, s * 0.80, s * 0.22, s * 0.11, cloud);
+    };
+    match kind {
+        Kind::Sun => draw_sun(cx, cy, size * 0.32, true),
+        Kind::Partly => {
+            draw_sun(cx - size * 0.18, cy - size * 0.18, size * 0.22, true);
+            cloud_at(cx + size * 0.06, cy + size * 0.10, 0.78);
+        }
+        Kind::Cloud => cloud_at(cx, cy, 0.95),
+        Kind::Fog => {
+            cloud_at(cx, cy - size * 0.10, 0.78);
+            for index in 0..3 {
+                let y = cy + size * (0.16 + index as f32 * 0.10);
+                let half = size * (0.40 - index as f32 * 0.05);
+                c.seg((cx - half, y), (cx + half, y), 1.6, Color32::from_gray(170));
+            }
+        }
+        Kind::Rain => {
+            cloud_at(cx, cy - size * 0.12, 0.80);
+            for index in 0..3 {
+                let x = cx - size * 0.22 + index as f32 * size * 0.20;
+                c.seg((x, cy + size * 0.20), (x - size * 0.08, cy + size * 0.40), 1.7, theme::BLUE);
+            }
+        }
+        Kind::Snow => {
+            cloud_at(cx, cy - size * 0.12, 0.80);
+            for index in 0..3 {
+                let x = cx - size * 0.22 + index as f32 * size * 0.20;
+                let y = cy + size * 0.30;
+                for spoke in 0..3 {
+                    let angle = TAU * spoke as f32 / 6.0 + 0.5;
+                    c.seg((x, y), (x + angle.cos() * size * 0.09, y + angle.sin() * size * 0.09), 1.3, Color32::from_rgb(180, 220, 255));
+                }
+            }
+        }
+        Kind::Thunder => {
+            cloud_at(cx, cy - size * 0.12, 0.82);
+            c.poly(
+                &[
+                    (cx + size * 0.02, cy + size * 0.10),
+                    (cx - size * 0.10, cy + size * 0.30),
+                    (cx - size * 0.01, cy + size * 0.30),
+                    (cx - size * 0.06, cy + size * 0.48),
+                    (cx + size * 0.12, cy + size * 0.22),
+                    (cx + size * 0.02, cy + size * 0.22),
+                ],
+                theme::YELLOW,
+            );
         }
     }
 }

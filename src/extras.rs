@@ -763,9 +763,9 @@ fn setting_choices(ui:&mut egui::Ui,title:&str,value:&mut u32,values:[u32;3],uni
         });
     });
 }
-const SETTINGS_GROUPS: [(&str,usize,usize);10] = [
+const SETTINGS_GROUPS: [(&str,usize,usize);11] = [
     ("常规",0,0), ("岛体外观",13,13), ("页面管理",10,10), ("音乐与歌词",1,1), ("专注与饮水",2,3),
-    ("待办与置物",4,5), ("通知、邮箱与日程",6,8), ("AI 额度",11,11),
+    ("待办与置物",4,5), ("通知、邮箱与日程",6,8), ("天气",14,14), ("AI 额度",11,11),
     ("剪贴板",12,12), ("关于",9,9),
 ];
 
@@ -848,6 +848,89 @@ impl App {
                     ui.data_mut(|data| data.insert_temp(id, now));
                 }
             }
+        });
+    }
+
+    fn weather_settings(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let muted = settings_color(&ctx, Color32::from_gray(180), Color32::from_gray(75));
+        ui.label(
+            egui::RichText::new("天气数据来自 Open-Meteo（免费、无需账号），需要联网；上次结果会缓存在本机。")
+                .size(12.0)
+                .color(muted),
+        );
+        settings_label(ui, "位置");
+        settings_card(ui, |ui| {
+            let was_enabled = self.settings.weather_enabled;
+            setting_row(ui, "启用天气", "在岛上显示当前天气与逐小时预报", &mut self.settings.weather_enabled);
+            if !was_enabled && self.settings.weather_enabled {
+                // 首次开启时把天气页重新放回导航，避免用户找不到。
+                self.settings.visible_pages[10] = true;
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("城市")
+                        .size(12.5)
+                        .color(settings_color(&ctx, Color32::WHITE, Color32::from_rgb(30, 34, 41))),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.weather_city)
+                            .hint_text("北京")
+                            .desired_width(150.0)
+                            .font(egui::FontId::proportional(12.5)),
+                    );
+                });
+            });
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new("支持中文或英文城市名，例如 北京、上海、杭州、Tokyo、New York。")
+                    .size(11.0)
+                    .color(muted),
+            );
+        });
+        settings_label(ui, "刷新");
+        settings_card(ui, |ui| {
+            setting_choices(ui, "自动刷新", &mut self.settings.weather_refresh_minutes, [15, 30, 60], "分钟");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("立即刷新").clicked() {
+                    self.request_weather_refresh();
+                }
+                ui.add_space(6.0);
+                if self.weather.loading {
+                    ui.label(egui::RichText::new("正在获取天气…").size(11.5).color(muted));
+                } else if let Some(error) = self.weather.error.as_deref() {
+                    ui.label(egui::RichText::new(error).size(11.5).color(Color32::from_rgb(220, 160, 90)));
+                } else if let Some(weather) = self.weather.current.as_ref() {
+                    let time = chrono::DateTime::from_timestamp(weather.updated_at, 0)
+                        .map(|time| time.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                        .unwrap_or_default();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} · {}° {} · 更新于 {time}",
+                            weather.city,
+                            weather.temperature.round() as i32,
+                            weather.label()
+                        ))
+                        .size(11.5)
+                        .color(settings_color(&ctx, Color32::from_gray(190), Color32::from_gray(60))),
+                    );
+                } else if self.settings.weather_enabled {
+                    ui.label(egui::RichText::new("等待首次获取，可点击「立即刷新」").size(11.5).color(muted));
+                } else {
+                    ui.label(egui::RichText::new("天气未开启").size(11.5).color(muted));
+                }
+            });
+        });
+        settings_label(ui, "提示");
+        settings_card(ui, |ui| {
+            ui.label(
+                egui::RichText::new("天气页会随岛体自动显示；点击页面左侧的天气区域可立即刷新。网络不可用时显示上次缓存，不会清空数据。")
+                    .size(11.5)
+                    .color(muted),
+            );
         });
     }
 
@@ -1066,6 +1149,7 @@ impl App {
                         6=>egui::include_image!("../assets/settings-icons/system/notifications.svg"),
                         12=>egui::include_image!("../assets/settings-icons/system/clipboard.svg"),
                         13=>egui::include_image!("../assets/settings-icons/system/appearance.svg"),
+                        14=>egui::include_image!("../assets/settings-icons/system/weather.svg"),
                         _=>egui::include_image!("../assets/settings-icons/system/about.svg"),
                     };
                     let icon_bg=egui::Rect::from_center_size(egui::pos2(rect.left()+21.0,rect.center().y),egui::vec2(25.0,25.0));
@@ -1086,8 +1170,8 @@ impl App {
                 ui.visuals_mut().widgets.hovered.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().widgets.active.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().selection.bg_fill=settings_color(ctx,Color32::from_rgb(45,105,165),Color32::from_rgb(209,226,248));
-                let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度","剪贴板","岛体外观"];
-                ui.label(egui::RichText::new(titles[self.settings_tab.min(13)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
+                let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度","剪贴板","岛体外观","天气"];
+                ui.label(egui::RichText::new(titles[self.settings_tab.min(14)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
                 if let Some((_,start,end))=SETTINGS_GROUPS.iter().find(|(_,start,end)|(*start..=*end).contains(&self.settings_tab)) {
                     if start!=end {
                         ui.add_space(7.0);
@@ -1111,6 +1195,7 @@ impl App {
                     11=>self.quota_settings(ui),
                     12=>self.clipboard_settings(ui),
                     13=>self.appearance_settings(ui),
+                    14=>self.weather_settings(ui),
                     10=>{
                         ui.label(egui::RichText::new("选择需要的页面和状态组件。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
                         settings_label(ui,"常驻排列");
@@ -1123,7 +1208,7 @@ impl App {
                         });
                         settings_label(ui,"功能页面");
                         settings_card(ui,|ui|{
-                            let descriptions=["播放控制与同步歌词","番茄钟与休息计时","饮水记录与提醒","临时收纳文件位置","任务清单与到期提醒","邮件摘要与验证码","Agent 剩余额度和账号切换","月历、邮件邀请与工作日程","CPU、内存、网络与磁盘实时状态","倒计时与秒表"];
+                            let descriptions=["播放控制与同步歌词","番茄钟与休息计时","饮水记录与提醒","临时收纳文件位置","任务清单与到期提醒","邮件摘要与验证码","Agent 剩余额度和账号切换","月历、邮件邀请与工作日程","CPU、内存、网络与磁盘实时状态","倒计时与秒表","当前天气与逐小时预报"];
                             ui.label(egui::RichText::new("拖动左侧手柄调整顺序，松开后自动应用到岛。").size(11.5).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
                             #[derive(Clone)]
                             struct PageDrag(usize);

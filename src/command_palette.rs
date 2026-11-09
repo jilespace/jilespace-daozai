@@ -48,6 +48,7 @@ pub enum Action {
     ToggleTimer,
     ResetTimer,
     SetStayAwake(bool),
+    RefreshWeather,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -60,6 +61,7 @@ pub struct Snapshot {
     pub timer_running: bool,
     pub timer_remaining: f64,
     pub stay_awake: bool,
+    pub weather_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -356,6 +358,16 @@ impl Panel {
                 "防睡眠 休眠 息屏 caffeine stay awake sleep",
                 Glyph::Gear,
                 Action::SetStayAwake(true),
+            ));
+        }
+        if snapshot.weather_enabled {
+            entries.push(action(
+                "action-weather-refresh",
+                "刷新天气",
+                "重新获取当前城市天气",
+                "天气 weather forecast refresh 刷新",
+                Glyph::Gear,
+                Action::RefreshWeather,
             ));
         }
         entries.push(action(
@@ -1127,6 +1139,7 @@ const SETTINGS_TABS: &[(usize, &str, &str, &str)] = &[
     (12, "剪贴板", "历史开关、容量与清空", "clipboard history"),
     (9, "关于", "版本、更新与开源声明", "about update version"),
     (13, "岛体外观", "不透明度、圆角与动效", "appearance opacity radius motion 外观 透明度 圆角 动效"),
+    (14, "天气", "城市、自动刷新与数据来源", "weather forecast city 天气 城市 预报"),
 ];
 
 fn page_english_keywords(page: usize) -> &'static str {
@@ -1694,6 +1707,7 @@ mod tests {
             timer_running: false,
             timer_remaining: 0.0,
             stay_awake: false,
+            weather_enabled: false,
         }
     }
 
@@ -1845,6 +1859,20 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn weather_refresh_action_is_searchable_when_enabled() {
+        let mut snapshot = snapshot();
+        snapshot.weather_enabled = true;
+        let mut palette = Panel::default();
+        palette.apps = fixture_apps();
+        palette.apps_at = Some(Instant::now());
+        palette.open(&snapshot);
+        palette.query = "天气".into();
+        palette.fade = 1.0;
+        palette.rebuild();
+        assert!(palette.results.iter().any(|entry| entry.action == Action::RefreshWeather), "开启天气后应能搜到刷新天气");
+    }
+
     #[test]
     fn timer_and_stay_awake_actions_are_searchable() {
         let palette = palette_for_test("防睡眠");

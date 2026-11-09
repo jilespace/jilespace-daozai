@@ -38,8 +38,8 @@ pub const RAD: f32 = 33.0; // 底部圆角
 pub const WIN_W: f32 = 640.0; // 窗口（透明画布）
 pub const CANVAS_W: f32 = WIN_W + 640.0; // 为右侧通知预留透明画布，原岛仍按 WIN_W 定位。
 pub const WIN_H: f32 = 270.0;
-pub(crate) const PAGE_NAMES: [&str; 10] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统", "计时"];
-pub(crate) const PAGE_DESCRIPTIONS: [&str; 10] = [
+pub(crate) const PAGE_NAMES: [&str; 11] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统", "计时", "天气"];
+pub(crate) const PAGE_DESCRIPTIONS: [&str; 11] = [
     "播放控制与同步歌词",
     "番茄钟与休息计时",
     "饮水记录与提醒",
@@ -50,6 +50,7 @@ pub(crate) const PAGE_DESCRIPTIONS: [&str; 10] = [
     "月历、邮件邀请与工作日程",
     "CPU、内存、网络与磁盘实时状态",
     "倒计时与秒表",
+    "当前天气与逐小时预报",
 ];
 
 // ---------- 动效参数 ----------
@@ -161,6 +162,7 @@ pub enum Cmd {
     CalendarForget,
     /// 清空剪贴板历史。
     ClipboardClear,
+    WeatherRefresh,
 }
 
 pub struct FrameOut {
@@ -312,6 +314,13 @@ impl CalendarState {
         Self { config, form, feeds, local, local_error, ..Default::default() }
     }
 
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WeatherState {
+    pub current: Option<crate::weather::Weather>,
+    pub error: Option<String>,
+    pub loading: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -582,7 +591,7 @@ pub struct App {
     page_dir: f32,
     page_t0: f64,
     slide: Spring,
-    dots: [Spring; 10],
+    dots: [Spring; 11],
     wheel_delta: f32,
     wheel_at: f64,
     wheel_page_at: f64,
@@ -689,6 +698,8 @@ pub struct App {
     pub(crate) system: SystemPageState,
     /// 计时页：倒计时与秒表。
     pub(crate) timer: TimerState,
+    /// 天气页：最近一次成功数据、错误与加载状态。
+    pub(crate) weather: WeatherState,
 }
 
 impl App {
@@ -786,6 +797,7 @@ impl App {
             resident: Default::default(), resident_power:(None,false),
             system: SystemPageState::default(),
             timer: TimerState::default(),
+            weather: WeatherState::default(),
         }
     }
 
@@ -1183,7 +1195,7 @@ impl App {
 
     pub fn show_page(&mut self,page:usize) {
         if !self.settings.visible_pages[page] {
-            self.settings_tab=[1,2,3,5,4,7,11,8,10,10][page];
+            self.settings_tab=[1,2,3,5,4,7,11,8,10,10,14][page];
             self.open_settings();
             return;
         }
@@ -1219,7 +1231,68 @@ impl App {
                 TimerMode::Stopwatch => self.timer.elapsed,
             },
             stay_awake: self.settings.stay_awake,
+            weather_enabled: self.settings.weather_enabled,
         }
+    }
+
+    /// 天气服务事件：失败时保留上一次成功数据，只记录错误。
+    pub fn weather_event(&mut self, event: crate::weather::Event) {
+        match event {
+            crate::weather::Event::Loading => self.weather.loading = true,
+            crate::weather::Event::Loaded(weather) => {
+                self.weather.current = Some(weather);
+                self.weather.error = None;
+                self.weather.loading = false;
+            }
+            crate::weather::Event::Failed(error) => {
+                self.weather.error = Some(error);
+                self.weather.loading = false;
+            }
+        }
+    }
+
+    pub fn request_weather_refresh(&mut self) {
+        self.weather.loading = true;
+        self.pending.push(Cmd::WeatherRefresh);
+    }
+
+    /// 录制/截图用的天气样例数据。
+    #[cfg(feature = "record")]
+    pub fn weather_demo(&mut self) {
+        let now = {
+            use chrono::TimeZone;
+            chrono::Local::now()
+                .date_naive()
+                .and_hms_opt(10, 28, 0)
+                .and_then(|at| chrono::Local.from_local_datetime(&at).single())
+                .map(|time| time.timestamp())
+                .unwrap_or_else(|| chrono::Local::now().timestamp())
+        };
+        self.weather.current = Some(crate::weather::Weather {
+            city: "北京".into(),
+            latitude: 39.9,
+            longitude: 116.4,
+            temperature: 11.2,
+            apparent: Some(9.0),
+            humidity: Some(46),
+            wind_kmh: Some(12.0),
+            code: 2,
+            is_day: true,
+            high: Some(16.0),
+            low: Some(3.0),
+            precip_chance: Some(10),
+            updated_at: now,
+            hourly: vec![
+                ("现在", 11.2, 2, Some(10)),
+                ("16时", 13.0, 2, Some(10)),
+                ("17时", 12.0, 3, Some(15)),
+                ("18时", 10.0, 3, Some(20)),
+                ("19时", 9.0, 61, Some(45)),
+                ("20时", 8.0, 61, Some(55)),
+            ].into_iter().map(|(label, temperature, code, precip_chance)| crate::weather::Hour { label: label.into(), temperature, code, precip_chance }).collect(),
+        });
+        self.weather.error = None;
+        self.weather.loading = false;
     }
 
     /// 命令面板用：开始一段指定分钟数的倒计时，并打开计时页。
@@ -1263,7 +1336,7 @@ impl App {
     }
     /// 命令面板用：直接打开设置并切到指定标签。
     pub fn open_settings_tab(&mut self, tab: usize) {
-        self.settings_tab = tab.min(13);
+        self.settings_tab = tab.min(14);
         self.open_settings();
     }
     pub fn open_settings_category(&mut self,category:usize){
@@ -1314,6 +1387,10 @@ impl App {
         self.page_from = self.page;
         self.page = page;
         if page==CALENDAR_PAGE {self.request_calendar_month(false);}
+        if page==10 && self.settings.weather_enabled && self.weather.current.is_none() && !self.weather.loading {
+            self.pending.push(Cmd::WeatherRefresh);
+            self.weather.loading=true;
+        }
         self.page_dir = dir;
         self.page_t0 = self.t;
         self.slide.pos = dir * PAGE_SLIDE + if self.page_e() < 0.4 { self.slide.pos * 0.3 } else { 0.0 };
@@ -1727,7 +1804,9 @@ impl App {
             || self.notice.as_ref().is_some_and(|notice|notice.meeting.is_some())
             // 系统页的曲线与数字持续缓动，打开时保持 30 帧。
             || self.open && self.page==8 && self.system.has_data()
-            || self.timer.running;
+            || self.timer.running
+            // 天气页图标有缓慢的太阳转动/云层漂移。
+            || self.open && self.page==10 && self.weather.current.is_some();
         let animating=transitioning || ambient || pet_visible && self.pet.state!=PetState::Sleeping;
         // 交互形变保持 60 帧，媒体 30 帧；小表情 20 帧，睡眠 10 帧，静态界面每秒核对提醒。
         let repaint_after=std::time::Duration::from_secs_f64(if transitioning{1.0/60.0}else if ambient{1.0/30.0}else if pet_visible{if self.pet.state==PetState::Sleeping{0.1}else{0.05}}else{1.0});
@@ -1973,7 +2052,7 @@ impl App {
         let (hover,press)=c.hover_t(&settings);
         c.circle(394.0,18.0,13.0,Color32::from_white_alpha((hover*24.0) as u8));
         paint::gear(&c.scaled(394.0,18.0,0.8*(1.0-press*0.08)),394.0,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
-        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10,10][self.page];self.open_settings();}
+        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10,10,14][self.page];self.open_settings();}
         if self.subpage==Some(self.page) {
             c.text(15.0,25.0,"‹",19.0,W::Bold,theme::WHITE,H::Left);
             c.text(37.0,25.0,if self.page==2{"饮水设置"}else{"专注设置"},size::TITLE,W::Bold,theme::WHITE,H::Left);
@@ -2016,6 +2095,7 @@ impl App {
             6 => ("AI", "额度", theme::SOFT_GREEN),
             8 => ("系统", "状态", theme::CYAN),
             9 => ("计时", "工具", theme::GREEN),
+            10 => ("天气", "预报", theme::CYAN),
             _ => ("岛仔", "设置", theme::WHITE),
         };
         let wa = c.text(15.0, base, a, size::TITLE, W::Bold, theme::WHITE, H::Left);
@@ -2074,6 +2154,7 @@ impl App {
             6 => self.page_quota(c),
             8 => self.page_system(c, env),
             9 => self.page_timer(c),
+            10 => self.page_weather(c),
             CALENDAR_PAGE => self.page_calendar(c,env),
             _ => self.page_settings(c),
         }

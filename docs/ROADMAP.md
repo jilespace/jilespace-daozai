@@ -25,6 +25,7 @@
 | 命令面板 | `Ctrl+Alt+K` 搜索页面/设置/应用/算式/单位换算，`Enter` 执行或复制 | `command_palette.rs`、`panel.rs`、`native.rs`、`tray.rs` |
 | 系统状态 | CPU/内存/网络/磁盘每秒采样，48 秒趋势曲线与容量条 | `perf.rs`、`pages.rs`、`main.rs` |
 | 计时 | 倒计时与秒表；倒计时运行时收起药丸显示剩余时间 | `app.rs`、`pages.rs` |
+| 天气 | 当前天气、体感/湿度/风与 6 小时预报；Open-Meteo + 本机缓存 | `weather.rs`、`pages.rs`、`main.rs` |
 | 岛体外观 | 不透明度/圆角/动效强度，设置页实时预览 | `model.rs`、`extras.rs`、`app.rs` |
 | 防睡眠 | 设置与命令面板一键阻止系统休眠/息屏 | `system.rs`、`model.rs` |
 | 图片取字 | `Ctrl+Alt+O` 识别剪贴板图片；`Ctrl+Alt+Shift+O` 框选屏幕取字，本地 OCR 并写入历史 | `ocr.rs`、`region_capture.rs`、`capture_ui.rs`、`main.rs` |
@@ -138,6 +139,8 @@ Notchy（macOS 13+，闭源，一次性 $24.99，v2.0.6）把 macOS 刘海变成
 7. **Phase G（基线已建立）性能与稳定性**：启动/空闲 CPU/内存基线、刷新策略回归护栏、
    解析与配置容错测试已落地（见 `docs/PERFORMANCE.md`）；后续继续压内存、冷启动与
    24 小时长时运行回归。
+8. **Phase H（已完成基础版）天气页**：Open-Meteo 当前天气 + 6 小时预报、矢量天气图标、
+   本机缓存与离线回退；后续补多日预报、定位与生活指数。
 
 ## 五、UI 规范草案（新面板统一遵守）
 
