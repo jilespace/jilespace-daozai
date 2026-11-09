@@ -226,6 +226,36 @@ fn process_page_renders_top_processes_and_opens_task_manager() {
 }
 
 #[test]
+fn process_page_can_switch_between_cpu_and_memory_sorting() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.processes_event(crate::processes::Snapshot {
+        items: vec![
+            crate::processes::Process { name: "cpu-heavy.exe".into(), pid: 1, cpu: 9.0, memory: 10_000_000 },
+            crate::processes::Process { name: "memory-heavy.exe".into(), pid: 2, cpu: 0.3, memory: 2_000_000_000 },
+            crate::processes::Process { name: "middle.exe".into(), pid: 3, cpu: 2.0, memory: 500_000_000 },
+        ],
+        total: 3,
+        cores: 8,
+    });
+    h.app.show_page(11);
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
+    for _ in 0..40 {h.frame(vec![]);}
+    let contains=|h:&H,text:&str|h.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.text().contains(text)));
+    let top_of=|h:&H,name:&str|h.shapes.iter().find_map(|shape|match &shape.shape {
+        egui::Shape::Text(t) if t.galley.text().contains(name) => Some(t.visual_bounding_rect().top()),
+        _=>None,
+    }).expect("进程名应渲染");
+    assert!(contains(&h,"按 CPU 排序"));
+    assert!(top_of(&h,"cpu-heavy.exe") < top_of(&h,"memory-heavy.exe"),"默认应按 CPU 排序");
+    h.t+=0.5;
+    h.click(H::local(90.0,40.0));
+    for _ in 0..6 {h.frame(vec![]);}
+    assert!(contains(&h,"按内存排序"),"点击表头应切换到内存排序");
+    assert!(top_of(&h,"memory-heavy.exe") < top_of(&h,"cpu-heavy.exe"),"切换后应按内存排序");
+}
+
+#[test]
 fn weather_page_shows_forecast_and_falls_back_gracefully() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();

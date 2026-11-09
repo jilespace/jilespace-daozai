@@ -18,6 +18,30 @@ pub struct Process {
     pub memory: u64,
 }
 
+/// 进程页的排序方式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProcessSort {
+    #[default]
+    Cpu,
+    Memory,
+}
+
+impl ProcessSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cpu => "CPU",
+            Self::Memory => "内存",
+        }
+    }
+
+    pub fn other(self) -> Self {
+        match self {
+            Self::Cpu => Self::Memory,
+            Self::Memory => Self::Cpu,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub items: Vec<Process>,
@@ -26,15 +50,35 @@ pub struct Snapshot {
     pub cores: u32,
 }
 
-/// 排序并截断：先 CPU 后内存，同分按名称稳定排序。
-pub fn rank(mut items: Vec<Process>, top: usize) -> Vec<Process> {
-    items.sort_by(|a, b| {
-        b.cpu
-            .partial_cmp(&a.cpu)
-            .unwrap_or(std::cmp::Ordering::Equal)
+impl Snapshot {
+    /// 按指定指标排序并截断前 N 个（进程数通常 <300，复制 8 条成本可忽略）。
+    pub fn top_sorted(&self, sort: ProcessSort, top: usize) -> Vec<Process> {
+        let mut items = self.items.clone();
+        sort_items(&mut items, sort);
+        items.truncate(top);
+        items
+    }
+}
+
+fn sort_items(items: &mut [Process], sort: ProcessSort) {
+    items.sort_by(|a, b| match sort {
+        ProcessSort::Cpu => b
+            .cpu
+            .total_cmp(&a.cpu)
             .then_with(|| b.memory.cmp(&a.memory))
-            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.name.cmp(&b.name)),
+        ProcessSort::Memory => b
+            .memory
+            .cmp(&a.memory)
+            .then_with(|| b.cpu.total_cmp(&a.cpu))
+            .then_with(|| a.name.cmp(&b.name)),
     });
+}
+
+/// 排序并截断：CPU 优先，同分按内存与名称。
+pub fn rank(items: Vec<Process>, top: usize) -> Vec<Process> {
+    let mut items = items;
+    sort_items(&mut items, ProcessSort::Cpu);
     items.truncate(top);
     items
 }
@@ -201,8 +245,10 @@ impl Sampler {
         }
         let total = items.len();
         self.previous = current;
+        let mut items = items;
+        sort_items(&mut items, ProcessSort::Cpu);
         Snapshot {
-            items: rank(items, TOP),
+            items,
             total,
             cores: self.cores,
         }
@@ -244,6 +290,27 @@ mod tests {
     }
 
     #[test]
+    fn top_sorted_switches_between_cpu_and_memory() {
+        let snapshot = Snapshot {
+            items: vec![
+                process("light", 1, 1.0, 10),
+                process("heavy-memory", 2, 0.5, 4096),
+                process("heavy-cpu", 3, 9.0, 64),
+            ],
+            total: 3,
+            cores: 8,
+        };
+        let by_cpu = snapshot.top_sorted(ProcessSort::Cpu, 2);
+        assert_eq!(by_cpu[0].name, "heavy-cpu");
+        assert_eq!(by_cpu[1].name, "light");
+        let by_memory = snapshot.top_sorted(ProcessSort::Memory, 2);
+        assert_eq!(by_memory[0].name, "heavy-memory");
+        assert_eq!(by_memory[1].name, "heavy-cpu");
+        assert_eq!(ProcessSort::Cpu.other(), ProcessSort::Memory);
+        assert_eq!(ProcessSort::Memory.label(), "内存");
+    }
+
+    #[test]
     fn formatting_cpu_and_memory_is_compact() {
         assert_eq!(format_cpu(0.0), "0%");
         assert_eq!(format_cpu(0.04), "0%");
@@ -262,9 +329,10 @@ mod tests {
         let snapshot = sampler.sample();
         assert!(snapshot.total > 5, "应能枚举到多个进程：{}", snapshot.total);
         assert!(!snapshot.items.is_empty());
-        assert!(snapshot.items.len() <= TOP);
-        for pair in snapshot.items.windows(2) {
-            assert!(pair[0].cpu >= pair[1].cpu || pair[0].memory >= pair[1].memory);
+        let top = snapshot.top_sorted(ProcessSort::Cpu, TOP);
+        assert_eq!(top.len(), snapshot.total.min(TOP));
+        for pair in top.windows(2) {
+            assert!(pair[0].cpu >= pair[1].cpu);
         }
         assert!(snapshot.items.iter().any(|process| !process.name.is_empty()));
     }

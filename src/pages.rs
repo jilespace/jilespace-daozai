@@ -1156,32 +1156,57 @@ impl App {
     }
     // ================= 进程排行 =================
     pub(crate) fn page_processes(&mut self, c: &Card) {
-        let snapshot = &self.processes;
-        c.text(44.0, 42.0, "按 CPU 排序", 9.5, W::Semibold, theme::WHITE, H::Left);
+        use crate::processes::ProcessSort;
+        let sort = self.process_sort;
+        let items = self.processes.top_sorted(sort, 8);
+        let total = self.processes.total;
+        let cores = self.processes.cores.max(1);
+        let open_task_manager = |app: &mut App| {
+            app.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
+        };
+        let sort_label = match sort {
+            ProcessSort::Cpu => "按 CPU 排序",
+            ProcessSort::Memory => "按内存排序",
+        };
+        c.text(44.0, 42.0, sort_label, 9.5, W::Semibold, theme::WHITE, H::Left);
+        // 用折线画一个小箭头，避免部分系统字体缺少 ▾ 字形。
+        let chevron_x = 44.0 + c.text_w(sort_label, 9.5, W::Semibold) + 4.0;
+        let chevron = Color32::from_gray(165);
+        c.seg((chevron_x, 39.5), (chevron_x + 2.5, 42.0), 1.0, chevron);
+        c.seg((chevron_x + 2.5, 42.0), (chevron_x + 5.0, 39.5), 1.0, chevron);
         c.text(
             375.0,
             42.0,
-            &format!("共 {} 个 · {} 核", snapshot.total.max(0), snapshot.cores.max(1)),
+            &format!("共 {total} 个 · {cores} 核 · 点击切换"),
             8.5,
             W::Regular,
             Color32::from_gray(135),
             H::Right,
         );
-        let open_task_manager = |app: &mut App| {
-            app.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
-        };
-        if snapshot.items.is_empty() {
+        // 整页点击打开任务管理器先登记，表头再盖上，避免表头点击被整页命中吞掉。
+        let page_hit = c
+            .hit(44.0, 32.0, 331.0, 92.0, "processes-open")
+            .on_hover_text("点击打开任务管理器");
+        let header = c
+            .hit(44.0, 32.0, 148.0, 14.0, "processes-sort")
+            .on_hover_text(format!("切换为按{}排序", sort.other().label()));
+        let header_clicked = header.clicked();
+        if header_clicked {
+            self.process_sort = sort.other();
+        }
+        if items.is_empty() {
             c.text(209.0, 72.0, "正在采集进程数据…", 11.0, W::Regular, theme::GRAY, H::Center);
             for index in 0..3 {
                 c.fill(44.0, 54.0 + index as f32 * 13.0, 190.0, 6.0, 3.0, Color32::from_white_alpha(12));
             }
-            if c.hit(44.0, 32.0, 331.0, 92.0, "processes-open").on_hover_text("点击打开任务管理器").clicked() {
+            if !header_clicked && page_hit.clicked() {
                 open_task_manager(self);
             }
             return;
         }
-        let max_cpu = snapshot.items.first().map(|process| process.cpu).unwrap_or(1.0).max(1.0);
-        for (index, process) in snapshot.items.iter().take(8).enumerate() {
+        let max_cpu = items.first().map(|process| process.cpu).unwrap_or(1.0).max(0.1);
+        let max_memory = items.iter().map(|process| process.memory).max().unwrap_or(1).max(1);
+        for (index, process) in items.iter().enumerate() {
             let top = 50.0 + index as f32 * 9.2;
             let baseline = top + 7.0;
             c.text(46.0, baseline, &format!("{}", index + 1), 7.4, W::Regular, Color32::from_gray(115), H::Left);
@@ -1196,8 +1221,10 @@ impl App {
             );
             let bar_x = 198.0;
             let bar_w = 54.0;
-            // 条长相对榜首缩放，弱负载时也能看出相对高低。
-            let fraction = (process.cpu / max_cpu).clamp(0.0, 1.0);
+            let fraction = match sort {
+                ProcessSort::Cpu => (process.cpu / max_cpu).clamp(0.0, 1.0),
+                ProcessSort::Memory => (process.memory as f32 / max_memory as f32).clamp(0.0, 1.0),
+            };
             c.fill(bar_x, baseline - 4.0, bar_w, 4.0, 2.0, Color32::from_gray(30));
             if fraction > 0.005 {
                 c.fill(
@@ -1206,7 +1233,10 @@ impl App {
                     (bar_w * fraction).max(2.0),
                     4.0,
                     2.0,
-                    cpu_bar_color(process.cpu),
+                    match sort {
+                        ProcessSort::Cpu => cpu_bar_color(process.cpu),
+                        ProcessSort::Memory => Color32::from_rgb(118, 158, 224),
+                    },
                 );
             }
             c.text(
@@ -1227,15 +1257,14 @@ impl App {
                 Color32::from_gray(145),
                 H::Right,
             );
-            if index + 1 < snapshot.items.len().min(8) {
+            if index + 1 < items.len() {
                 c.seg((44.0, top + 8.4), (375.0, top + 8.4), 0.5, Color32::from_gray(30));
             }
         }
-        if c.hit(44.0, 32.0, 331.0, 92.0, "processes-open").on_hover_text("点击打开任务管理器").clicked() {
+        if !header_clicked && page_hit.clicked() {
             open_task_manager(self);
         }
     }
-
     // ================= 计时（倒计时 / 秒表） =================
     pub(crate) fn page_timer(&mut self, c: &Card) {
         let running = self.timer.running;

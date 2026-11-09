@@ -534,7 +534,7 @@ fn gallery() {
     let (root,_)=setup_data();
     let dest=std::env::args().nth(2).unwrap_or_else(||"preview".into());
     std::fs::create_dir_all(&dest).unwrap();
-    for scene in 0..25 {
+    for scene in 0..26 {
         let ctx=egui::Context::default();
         let mut app=App::new(&ctx,Options{fetch_lyrics:false,pet_idle:45.0});
         app.settings.pet=true;
@@ -542,7 +542,7 @@ fn gallery() {
         let mut rgba=vec![];
         for frame in 0..75 {
             let t=frame as f64/60.0;
-            if scene<5 {app.show_page(scene);} if scene==18 {app.show_page(8);app.system_demo();} if scene==19 {app.show_page(9);app.timer_demo();} if scene==20 {app.settings.island_opacity=58;app.settings.island_radius=160;app.show_page(0);} if scene==21 {app.settings.visible_pages[10]=true;app.settings.weather_enabled=true;app.weather_demo();app.show_page(10);} if scene==22 {app.settings.visible_pages[10]=true;app.settings.weather_enabled=true;app.weather_demo();app.weather_days_demo();app.show_page(10);} if scene==23 {app.settings.audio_visualizer=true;app.spectrum_demo();} if scene==24 {app.processes_demo();app.show_page(11);} if (11..14).contains(&scene){app.open_settings_category(scene-10);}
+            if scene<5 {app.show_page(scene);} if scene==18 {app.show_page(8);app.system_demo();} if scene==19 {app.show_page(9);app.timer_demo();} if scene==20 {app.settings.island_opacity=58;app.settings.island_radius=160;app.show_page(0);} if scene==21 {app.settings.visible_pages[10]=true;app.settings.weather_enabled=true;app.weather_demo();app.show_page(10);} if scene==22 {app.settings.visible_pages[10]=true;app.settings.weather_enabled=true;app.weather_demo();app.weather_days_demo();app.show_page(10);} if scene==23 {app.settings.audio_visualizer=true;app.spectrum_demo();} if scene==24 {app.processes_demo();app.show_page(11);} if scene==25 {app.processes_demo();app.process_sort_memory_demo();app.show_page(11);} if (11..14).contains(&scene){app.open_settings_category(scene-10);}
             if scene==9 && frame==0 {app.alert("喝水时间到了","休息一下，喝 250 ml 水吧",2,false);}
             if scene==14 && frame==0 {app.alert("专注计时","该休息了",1,false);}
             if scene==15 && frame==0 {app.alert("系统音量","音量 67%",5,false);}

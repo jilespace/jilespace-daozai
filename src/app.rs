@@ -704,6 +704,8 @@ pub struct App {
     pub(crate) weather: WeatherState,
     /// 进程页：最近一次进程排行快照。
     pub(crate) processes: crate::processes::Snapshot,
+    /// 进程页排序方式（CPU / 内存）。
+    pub(crate) process_sort: crate::processes::ProcessSort,
     /// 天气页右侧卡片：`true` 显示多日预报，`false` 显示逐小时。
     pub(crate) weather_days: bool,
     /// 最近一帧系统音频频谱。
@@ -812,6 +814,7 @@ impl App {
             timer: TimerState::default(),
             weather: WeatherState::default(),
             processes: crate::processes::Snapshot::default(),
+            process_sort: crate::processes::ProcessSort::default(),
             spectrum: crate::audio::Spectrum::default(),
             spectrum_at: -10.0,
             weather_days: false,
@@ -1286,6 +1289,11 @@ impl App {
     /// 进程页是否正在前台显示（外壳据此启停采样线程）。
     pub fn process_page_active(&self) -> bool {
         self.open && self.page == 11
+    }
+
+    #[cfg(feature = "record")]
+    pub fn process_sort_memory_demo(&mut self) {
+        self.process_sort = crate::processes::ProcessSort::Memory;
     }
 
     #[cfg(feature = "record")]
