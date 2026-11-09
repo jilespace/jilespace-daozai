@@ -124,13 +124,13 @@ impl State {
                     #[cfg(windows)]
                     clip_update_window(window, ctx.pixels_per_point());
                     ui.painter().rect_filled(window, 22.0, egui::Color32::from_rgb(25,25,28));
-                    ui.painter().rect_stroke(window, 22.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(55,55,61)), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(window, 22.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(55,55,61)), egui::StrokeKind::Inside);
                     let close_rect = egui::Rect::from_min_size(window.right_top()+egui::vec2(-42.0,12.0),egui::vec2(28.0,28.0));
                     let close = ui.interact(close_rect, ui.id().with("update-close"), egui::Sense::click()).on_hover_text("关闭");
                     if close.hovered() { ui.painter().rect_filled(close_rect, 8.0, theme::BTN_HOVER); }
                     let center = close_rect.center();
                     for direction in [-1.0,1.0] {
-                        ui.painter().line_segment([center+egui::vec2(-4.0,-4.0*direction),center+egui::vec2(4.0,4.0*direction)],egui::Stroke::new(1.5,theme::GRAY));
+                        ui.painter().line_segment([center+egui::vec2(-4.0,-4.0*direction),center+egui::vec2(4.0,4.0*direction)],egui::Stroke::new(1.5_f32,theme::GRAY));
                     }
                     if close.clicked() && !installing { self.dismiss(); }
                     let drag_rect = egui::Rect::from_min_max(window.min,egui::pos2(close_rect.left()-8.0,window.top()+42.0));

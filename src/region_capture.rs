@@ -189,6 +189,26 @@ mod tests {
         assert!(crop(&source, 0, 0, 6, 6).is_ok());
     }
 
+    #[test]
+    fn random_crop_windows_stay_in_bounds_without_panicking() {
+        let source = image(64, 48);
+        let mut state = 7u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 40) as i64
+        };
+        for _ in 0..400 {
+            let x = (next() % 220 - 110) as i32;
+            let y = (next() % 220 - 110) as i32;
+            let width = (next() % 180) as u32;
+            let height = (next() % 180) as u32;
+            if let Ok(out) = crop(&source, x, y, width, height) {
+                assert!(out.width <= 64 && out.height <= 48);
+                assert_eq!(out.rgba.len() as u32, out.width * out.height * 4);
+            }
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn captures_a_screen_region_with_opaque_pixels() {

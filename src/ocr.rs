@@ -439,6 +439,24 @@ mod tests {
     }
 
     #[test]
+    fn random_or_truncated_dib_bytes_never_panic() {
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) as u8
+        };
+        for len in 0..384 {
+            let bytes: Vec<u8> = (0..len).map(|_| next()).collect();
+            let _ = decode_dib(&bytes);
+        }
+        let valid = dib(6, 4, 24, &[0u8; 96], &[]);
+        for cut in 0..valid.len() {
+            let _ = decode_dib(&valid[..cut]);
+        }
+        assert!(decode_dib(&valid).is_ok());
+    }
+
+    #[test]
     fn decodes_png_images_from_browsers() {
         let mut source = image::RgbaImage::new(3, 2);
         source.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));

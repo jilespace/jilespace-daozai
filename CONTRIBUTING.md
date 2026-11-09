@@ -39,6 +39,7 @@ cargo run --locked --bin daozai
 | `src/ui_tests.rs` | 无窗口交互与布局回归测试 |
 | `src/bin/daozai-record` | 合成数据演示与软件渲染器 |
 | `docs/ROADMAP.md`、`docs/PROGRESS.md` | 对标、迭代顺序与阶段记录 |
+| `docs/PERFORMANCE.md` | 启动/空闲 CPU/内存基线、刷新策略与回归护栏 |
 | `vendor/` | 少量必要的上游补丁，见依赖说明 |
 | `installer/`、`scripts/` | 安装、卸载与打包 |
 

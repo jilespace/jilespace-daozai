@@ -6,6 +6,61 @@ use std::sync::Mutex;
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn corrupt_settings_values_fall_back_without_panicking() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    std::fs::create_dir_all(crate::model::config_dir()).unwrap();
+    std::fs::write(
+        crate::model::config_dir().join("settings.txt"),
+        "island_opacity=abc\nisland_radius=-5\nmotion=???\npage_order=1,1,1\nvisible_pages=xx\nshow_battery=??\nlimited=1e999\nwater_minutes=999999\n",
+    )
+    .unwrap();
+    let settings=crate::model::Settings::load();
+    assert_eq!(settings.island_opacity,100);
+    assert_eq!(settings.island_radius,100);
+    assert_eq!(settings.motion,crate::model::MotionPreference::System);
+    assert_eq!(settings.page_order,[0,1,2,3,4,5,6,7,8,9]);
+    assert!(settings.visible_pages.iter().any(|enabled|*enabled));
+    // 重新渲染不应受损坏配置影响。
+    h.app.settings=settings;
+    h.app.apply_motion_setting();
+    h.frame(vec![]);
+}
+
+#[test]
+fn idle_repaint_policy_follows_animation_state() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    // 收起、无宠物、无媒体：静态界面每秒核对一次提醒即可。
+    h.app.set_pet(false);
+    h.cursor=None;
+    for _ in 0..120 {h.frame(vec![]);}
+    assert!(!h.app.open);
+    assert!(h.repaint_after>=std::time::Duration::from_millis(900),"静态收起态应低频刷新，实际 {:?}",h.repaint_after);
+    // 展开静态页同样是低频；鼠标停在顶部只做形变。
+    h.app.show_page(1);
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
+    for _ in 0..40 {h.frame(vec![]);}
+    assert!(h.repaint_after>=std::time::Duration::from_millis(900),"静态展开页应低频刷新，实际 {:?}",h.repaint_after);
+    // 关闭岛体动效后，悬停展开也应立即到位，不留下 60 帧的回收期。
+    h.app.settings.motion=crate::model::MotionPreference::Off;
+    h.app.apply_motion_setting();
+    h.cursor=None;for _ in 0..60 {h.frame(vec![]);}
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
+    for _ in 0..6 {h.frame(vec![]);}
+    assert!(h.app.open);
+    assert!(h.repaint_after>=std::time::Duration::from_millis(900),"动效关闭后不应继续逐帧重绘，实际 {:?}",h.repaint_after);
+    h.app.settings.motion=crate::model::MotionPreference::System;
+    h.app.apply_motion_setting();
+    // 媒体播放时保持 30 帧动画节奏。
+    h.app.show_page(0);
+    h.hover(H::local(300.0,60.0),0.6);
+    h.media=crate::smtc::NowPlaying{title:"Track".into(),artist:"Artist".into(),playing:true,duration:120.0,..Default::default()};
+    for _ in 0..30 {h.frame(vec![]);}
+    assert!(h.repaint_after<=std::time::Duration::from_millis(40),"播放时应保持动画刷新，实际 {:?}",h.repaint_after);
+}
+
+#[test]
 fn appearance_settings_persist_and_apply_to_island() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
@@ -371,6 +426,7 @@ struct H {
     region:Rect,
     hit:Rect,
     animating:bool,
+    repaint_after:std::time::Duration,
     shapes:Vec<egui::epaint::ClippedShape>,
     bt: Vec<crate::bt::Device>,
     media: crate::smtc::NowPlaying,
@@ -393,7 +449,7 @@ impl H {
         std::env::set_var("DAOZAI_DATA_DIR", &dir);
         let ctx = egui::Context::default();
         let app = App::new(&ctx, Options { fetch_lyrics: false, pet_idle: 1e9 });
-        Self { ctx, app, t: 0.0, cursor: None,cmds:vec![],region:Rect::NOTHING,hit:Rect::NOTHING,animating:false,shapes:Vec::new(), bt:Vec::new(),media:Default::default(),power:(None,false),network:None,system_idle:None,browser_at_top:None,file_drop_zone:None,hovered_files:vec![],dropped_files:vec![],cpu:None,memory:None,network_rates:None,disk:None }
+        Self { ctx, app, t: 0.0, cursor: None,cmds:vec![],region:Rect::NOTHING,hit:Rect::NOTHING,animating:false,repaint_after:std::time::Duration::ZERO,shapes:Vec::new(), bt:Vec::new(),media:Default::default(),power:(None,false),network:None,system_idle:None,browser_at_top:None,file_drop_zone:None,hovered_files:vec![],dropped_files:vec![],cpu:None,memory:None,network_rates:None,disk:None }
     }
     fn frame(&mut self, events: Vec<egui::Event>) {
         self.t += 1.0 / 60.0;
@@ -430,12 +486,13 @@ impl H {
         let region=&mut self.region;
         let hit=&mut self.hit;
         let animating=&mut self.animating;
+        let repaint_after=&mut self.repaint_after;
         let app = &mut self.app;
         let file_drop_zone=&mut self.file_drop_zone;
         let output = self.ctx.run(raw, |ctx| {
             egui::CentralPanel::default().frame(egui::Frame::new()).show(ctx, |ui| {
                 let win = Rect::from_min_size(ui.max_rect().min,Vec2::new(WIN_W,WIN_H));
-                let frame=app.frame(ui, win, &env);*region=frame.region;*hit=frame.hit;*animating=frame.animating;*file_drop_zone=frame.file_drop_zone;cmds.extend(frame.cmds);
+                let frame=app.frame(ui, win, &env);*region=frame.region;*hit=frame.hit;*animating=frame.animating;*repaint_after=frame.repaint_after;*file_drop_zone=frame.file_drop_zone;cmds.extend(frame.cmds);
             });
         });
         self.shapes=output.shapes;
@@ -3611,6 +3668,7 @@ fn clipboard_settings_default_off_and_round_trip() {
     assert_eq!(loaded.clipboard_limit, 80);
     assert_eq!(loaded.clipboard_days, 3);
 
+    std::fs::create_dir_all(crate::model::config_dir()).unwrap();
     std::fs::write(
         crate::model::config_dir().join("settings.txt"),
         "clipboard_limit=9999\nclipboard_days=0\n",
