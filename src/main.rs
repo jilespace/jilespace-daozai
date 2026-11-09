@@ -70,6 +70,8 @@ struct Shell {
     /// 框选取字：整屏位图、目标显示器与全屏遮罩。
     capture_overlay: daozai::capture_ui::Overlay,
     capture_purpose: daozai::capture_ui::Purpose,
+    /// 截图标注编辑器。
+    annotate: daozai::annotate::Editor,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -176,6 +178,7 @@ impl Shell {
             ocr_rx: None,
             capture_overlay: Default::default(),
             capture_purpose: Default::default(),
+            annotate: Default::default(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -228,6 +231,7 @@ impl Shell {
     }
 
     fn open_clipboard(&mut self, ctx: &egui::Context, restore: bool) {
+        self.annotate.close();
         self.close_notifications();
         self.command_palette.close();
         #[cfg(windows)]
@@ -364,6 +368,7 @@ impl Shell {
     }
 
     fn open_notifications(&mut self, ctx: &egui::Context) {
+        self.annotate.close();
         if self.capture_overlay.open {
             return;
         }
@@ -494,6 +499,7 @@ impl Shell {
     }
 
     fn start_region_capture(&mut self, ctx: &egui::Context, purpose: daozai::capture_ui::Purpose) {
+        self.annotate.close();
         if self.capture_overlay.open {
             return;
         }
@@ -547,7 +553,7 @@ impl Shell {
                 match daozai::region_capture::crop(&image, x, y, width, height) {
                     Ok(cropped) => match purpose {
                         daozai::capture_ui::Purpose::Ocr => self.start_ocr_image(ctx, cropped),
-                        daozai::capture_ui::Purpose::Screenshot => self.finish_screenshot(cropped),
+                        daozai::capture_ui::Purpose::Screenshot => self.finish_screenshot(ctx, cropped),
                     },
                     Err(error) => self.app.say(error),
                 }
@@ -555,13 +561,34 @@ impl Shell {
         }
     }
 
-    /// 截图完成：复制到剪贴板并保存 PNG，两个步骤分别报状态。
-    fn finish_screenshot(&mut self, image: daozai::ocr::Image) {
-        #[cfg(windows)]
-        daozai::screenshot::copy_to_clipboard(&image);
-        match daozai::screenshot::save_png(&image) {
-            Ok(path) => self.app.say(format!("截图已复制并保存到 {}", path.display())),
-            Err(error) => self.app.say(format!("已复制截图，但保存失败：{error}")),
+    /// 截图完成：进入标注编辑器，复制/保存由编辑器决定。
+    fn finish_screenshot(&mut self, ctx: &egui::Context, image: daozai::ocr::Image) {
+        self.annotate.open(ctx, image);
+        ctx.request_repaint();
+    }
+
+    fn show_annotate(&mut self, ctx: &egui::Context) {
+        if !self.annotate.is_open() {
+            return;
+        }
+        use daozai::annotate::Action as AnnotateAction;
+        let dark = daozai::settings_theme::system_dark(ctx);
+        match self.annotate.show(ctx, dark) {
+            AnnotateAction::None => {}
+            AnnotateAction::Close => self.annotate.close(),
+            AnnotateAction::Copy(image) => {
+                #[cfg(windows)]
+                daozai::screenshot::copy_to_clipboard(&image);
+                self.app.say("已复制标注截图");
+                self.annotate.close();
+            }
+            AnnotateAction::Save(image) => {
+                match daozai::screenshot::save_png(&image) {
+                    Ok(path) => self.app.say(format!("标注截图已保存到 {}", path.display())),
+                    Err(error) => self.app.say(format!("保存标注截图失败：{error}")),
+                }
+                self.annotate.close();
+            }
         }
     }
 
@@ -636,6 +663,7 @@ impl Shell {
     }
 
     fn open_command_palette(&mut self, ctx: &egui::Context) {
+        self.annotate.close();
         self.close_notifications();
         // 两个浮层互斥：同时打开会互相抢焦点。
         if self.clipboard_popup.open {
@@ -844,7 +872,7 @@ impl eframe::App for Shell {
                 self.start_region_screenshot(ctx);
             } else if screen_ocr {
                 self.start_region_ocr(ctx);
-            } else if !self.capture_overlay.open {
+            } else if !self.capture_overlay.open && !self.annotate.is_open() {
                 if clipboard_hotkey {
                     if self.clipboard_popup.open {
                         self.close_clipboard(true);
@@ -1061,9 +1089,10 @@ impl eframe::App for Shell {
         self.show_command_palette(ctx);
         self.show_notifications(ctx);
         self.show_capture_overlay(ctx);
+        self.show_annotate(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after
