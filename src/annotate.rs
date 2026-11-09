@@ -412,6 +412,7 @@ pub enum Action {
     Close,
     Copy(Image),
     Save(Image),
+    Pin(Image),
 }
 
 pub struct Editor {
@@ -625,6 +626,11 @@ impl Editor {
                                 if ui.button(egui::RichText::new("复制").size(11.0).strong()).clicked() {
                                     if let Some(base) = self.base.clone() {
                                         action = Action::Copy(rasterize(&base, &self.shapes));
+                                    }
+                                }
+                                if ui.button(egui::RichText::new("贴图").size(11.0)).clicked() {
+                                    if let Some(base) = self.base.clone() {
+                                        action = Action::Pin(rasterize(&base, &self.shapes));
                                     }
                                 }
                                 if ui
@@ -1137,7 +1143,7 @@ mod tests {
         for clipped in &output.shapes {
             collect(&clipped.shape, &mut texts);
         }
-        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "马赛克", "高亮", "撤销", "复制", "保存"] {
+        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "马赛克", "高亮", "撤销", "复制", "贴图", "保存"] {
             assert!(texts.iter().any(|text| text.galley.text().contains(expected)), "编辑器缺少 {expected}");
         }
         if let Some(dest) = std::env::var_os("DAOZAI_ANNOTATE_PREVIEW_DIR").filter(|value| !value.is_empty()) {

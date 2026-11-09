@@ -72,6 +72,8 @@ struct Shell {
     capture_purpose: daozai::capture_ui::Purpose,
     /// 截图标注编辑器。
     annotate: daozai::annotate::Editor,
+    /// 贴在桌面上的截图（置顶小窗）。
+    pins: Vec<daozai::pin::Pin>,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -179,6 +181,7 @@ impl Shell {
             capture_overlay: Default::default(),
             capture_purpose: Default::default(),
             annotate: Default::default(),
+            pins: Vec::new(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -567,6 +570,14 @@ impl Shell {
         ctx.request_repaint();
     }
 
+    fn show_pins(&mut self, ctx: &egui::Context) {
+        if self.pins.is_empty() {
+            return;
+        }
+        let dark = daozai::settings_theme::system_dark(ctx);
+        self.pins.retain_mut(|pin| !pin.show(ctx, dark));
+    }
+
     fn show_annotate(&mut self, ctx: &egui::Context) {
         if !self.annotate.is_open() {
             return;
@@ -588,6 +599,15 @@ impl Shell {
                     Err(error) => self.app.say(format!("保存标注截图失败：{error}")),
                 }
                 self.annotate.close();
+            }
+            AnnotateAction::Pin(image) => {
+                self.annotate.close();
+                if self.pins.len() >= 6 {
+                    self.app.say("最多同时贴 6 张图，先右键关闭一些吧");
+                } else {
+                    self.pins.push(daozai::pin::Pin::new(image, ctx.pixels_per_point()));
+                    self.app.say("已贴到桌面，右键或双击关闭");
+                }
             }
         }
     }
@@ -1090,9 +1110,10 @@ impl eframe::App for Shell {
         self.show_notifications(ctx);
         self.show_capture_overlay(ctx);
         self.show_annotate(ctx);
+        self.show_pins(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() {
             Duration::from_millis(16)
         } else {
             repaint_after
