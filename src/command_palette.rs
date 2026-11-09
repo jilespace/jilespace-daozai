@@ -51,6 +51,7 @@ pub enum Action {
     RefreshWeather,
     OpenNotifications,
     ScreenshotRegion,
+    CopyClipboard(String),
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -76,6 +77,7 @@ pub struct PageInfo {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Section {
     Action,
+    Clipboard,
     Page,
     Setting,
     App,
@@ -86,6 +88,7 @@ impl Section {
     fn label(self) -> &'static str {
         match self {
             Self::Action => "操作",
+            Self::Clipboard => "剪贴板",
             Self::Page => "页面",
             Self::Setting => "设置",
             Self::App => "应用",
@@ -97,9 +100,10 @@ impl Section {
         match self {
             Self::Calc => 0,
             Self::Action => 1,
-            Self::Page => 2,
-            Self::Setting => 3,
-            Self::App => 4,
+            Self::Clipboard => 2,
+            Self::Page => 3,
+            Self::Setting => 4,
+            Self::App => 5,
         }
     }
 }
@@ -135,12 +139,21 @@ struct AppEntry {
     path: PathBuf,
 }
 
+/// 命令面板里可搜索的剪贴板条目（只带预览，不复制整段大文本）。
+#[derive(Clone, Debug)]
+pub struct ClipboardItem {
+    pub id: String,
+    pub text: String,
+}
+
 pub struct Panel {
     pub open: bool,
     query: String,
     selected: usize,
     selected_id: Option<String>,
     base: Vec<Entry>,
+    snapshot: Snapshot,
+    clipboard: Vec<ClipboardItem>,
     results: Vec<Entry>,
     apps: Vec<AppEntry>,
     apps_at: Option<Instant>,
@@ -164,6 +177,8 @@ impl Default for Panel {
             selected: 0,
             selected_id: None,
             base: Vec::new(),
+            snapshot: Snapshot::default(),
+            clipboard: Vec::new(),
             results: Vec::new(),
             apps: Vec::new(),
             apps_at: None,
@@ -182,12 +197,29 @@ impl Default for Panel {
 }
 
 impl Panel {
+    /// 更新命令面板可搜索的剪贴板条目；内容没变时不重建。
+    pub fn set_clipboard(&mut self, items: Vec<ClipboardItem>) {
+        if self.clipboard.len() == items.len()
+            && self.clipboard.iter().zip(items.iter()).all(|(old, new)| old.id == new.id && old.text == new.text)
+        {
+            return;
+        }
+        self.clipboard = items;
+        if self.open {
+            let snapshot = self.snapshot.clone();
+            self.base = self.build_base(&snapshot);
+            self.rebuild();
+        }
+    }
+
     pub fn open(&mut self, snapshot: &Snapshot) {
         self.open = true;
         self.query.clear();
         self.selected = 0;
         self.selected_id = None;
-        self.base = self.build_base(snapshot);
+        self.snapshot = snapshot.clone();
+        let snapshot = snapshot.clone();
+        self.base = self.build_base(&snapshot);
         self.rebuild();
         self.position = None;
         self.request_focus = true;
@@ -460,6 +492,25 @@ impl Panel {
                 glyph: Glyph::App,
             });
         }
+        for item in self.clipboard.iter().take(30) {
+            let one_line = item.text.lines().next().unwrap_or("").trim();
+            let title = if one_line.chars().count() > 68 {
+                format!("{}…", one_line.chars().take(68).collect::<String>())
+            } else if one_line.is_empty() {
+                "（空白）".to_string()
+            } else {
+                one_line.to_string()
+            };
+            entries.push(Entry {
+                id: format!("clipboard:{}", item.id),
+                section: Section::Clipboard,
+                title,
+                subtitle: "剪贴板 · Enter 复制到剪贴板".into(),
+                haystack: item.text.chars().take(4000).collect::<String>().to_lowercase(),
+                action: Action::CopyClipboard(item.id.clone()),
+                glyph: Glyph::Clipboard,
+            });
+        }
         entries
     }
 
@@ -467,7 +518,7 @@ impl Panel {
         let needle = self.query.trim().to_lowercase();
         let mut matches: Vec<(u16, usize, usize, Entry)> = Vec::new();
         for (index, entry) in self.base.iter().enumerate() {
-            if needle.is_empty() && entry.section == Section::App {
+            if needle.is_empty() && matches!(entry.section, Section::App | Section::Clipboard) {
                 continue;
             }
             if let Some(score) = match_score(entry, &needle) {
@@ -1878,6 +1929,30 @@ mod tests {
         }
     }
     #[test]
+    fn clipboard_entries_are_searchable_but_hidden_from_empty_query() {
+        let mut palette = Panel::default();
+        palette.open(&snapshot());
+        palette.set_clipboard(vec![
+            ClipboardItem { id: "c1".into(), text: "https://example.com 设计文档".into() },
+            ClipboardItem { id: "c2".into(), text: "git rebase --onto main".into() },
+        ]);
+        palette.query = "设计".into();
+        palette.fade = 1.0;
+        palette.rebuild();
+        let entry = palette
+            .results
+            .iter()
+            .find(|entry| entry.section == Section::Clipboard)
+            .expect("应能搜到剪贴板条目");
+        assert!(entry.title.contains("设计文档"));
+        assert_eq!(entry.action, Action::CopyClipboard("c1".into()));
+        // 空查询不展示剪贴板内容，避免面板一打开就暴露历史。
+        palette.query.clear();
+        palette.rebuild();
+        assert!(palette.results.iter().all(|entry| entry.section != Section::Clipboard));
+    }
+
+    #[test]
     fn screenshot_action_is_searchable() {
         let palette = palette_for_test("截屏");
         assert!(
@@ -2116,6 +2191,19 @@ mod tests {
         let unit = render_palette(&mut unit, true);
         assert_inside(&unit, "单位换算");
         assert!(contains(&unit.shapes, "32.2222"));
+        let mut clipboard = Panel::default();
+        clipboard.open(&snapshot());
+        clipboard.set_clipboard(vec![
+            ClipboardItem { id: "c1".into(), text: "https://example.com/design 设计文档".into() },
+            ClipboardItem { id: "c2".into(), text: "git rebase --onto main".into() },
+        ]);
+        clipboard.query = "example".into();
+        clipboard.fade = 1.0;
+        clipboard.rebuild();
+        let clipboard = render_palette(&mut clipboard, true);
+        assert_inside(&clipboard, "剪贴板结果");
+        assert!(contains(&clipboard.shapes, "剪贴板"));
+        assert!(contains(&clipboard.shapes, "设计文档"));
         if let Some(dest) = std::env::var_os("DAOZAI_COMMAND_PREVIEW_DIR").filter(|value| !value.is_empty()) {
             let dest = PathBuf::from(dest);
             std::fs::create_dir_all(&dest).unwrap();
@@ -2125,6 +2213,7 @@ mod tests {
             write_png(&empty, &dest.join("command-empty.png"));
             write_png(&app, &dest.join("command-app.png"));
             write_png(&unit, &dest.join("command-unit.png"));
+            write_png(&clipboard, &dest.join("command-clipboard.png"));
         }
     }
 }

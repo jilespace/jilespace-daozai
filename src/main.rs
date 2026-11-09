@@ -58,6 +58,8 @@ struct Shell {
     quota_at: PollClock,
     clipboard: daozai::clipboard::Service,
     clipboard_popup: daozai::clipboard_ui::Popup,
+    /// 最近一次剪贴板历史快照，供命令面板搜索。
+    clipboard_items: Vec<daozai::clipboard::Item>,
     clipboard_sig: (bool, usize, u32, bool),
     #[cfg(windows)]
     clipboard_prev: Option<windows::Win32::Foundation::HWND>,
@@ -165,6 +167,7 @@ impl Shell {
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
             clipboard,
             clipboard_popup: daozai::clipboard_ui::Popup::default(),
+            clipboard_items: Vec::new(),
             clipboard_sig: (clipboard_enabled, clipboard_limit, clipboard_days, clipboard_clean_links),
             #[cfg(windows)]
             clipboard_prev: None,
@@ -289,6 +292,11 @@ impl Shell {
             match event {
                 daozai::clipboard::Event::Changed(items) => {
                     self.clipboard_popup.set_items((*items).clone());
+                    self.clipboard_items = (*items).clone();
+                    if self.command_palette.is_open() {
+                        let entries = self.palette_clipboard_entries();
+                        self.command_palette.set_clipboard(entries);
+                    }
                 }
                 daozai::clipboard::Event::Copied(_) => {
                     if let Some((id, paste)) = self.clipboard_transfer.take() {
@@ -373,6 +381,13 @@ impl Shell {
         );
         self.notifications_rev = self.app.notifications_revision();
         ctx.request_repaint();
+    }
+
+    fn palette_clipboard_entries(&self) -> Vec<daozai::command_palette::ClipboardItem> {
+        self.clipboard_items
+            .iter()
+            .map(|item| daozai::command_palette::ClipboardItem { id: item.id.clone(), text: item.text.clone() })
+            .collect()
     }
 
     fn close_notifications(&mut self) {
@@ -628,6 +643,8 @@ impl Shell {
         }
         let snapshot = self.app.palette_snapshot();
         self.command_palette.open(&snapshot);
+        let entries = self.palette_clipboard_entries();
+        self.command_palette.set_clipboard(entries);
         #[cfg(windows)]
         let error = self.native.as_ref().and_then(|native| native.command_hotkey_error.clone());
         #[cfg(not(windows))]
@@ -638,6 +655,7 @@ impl Shell {
 
     fn close_command_palette(&mut self) {
         self.command_palette.close();
+        self.command_palette.set_clipboard(Vec::new());
     }
 
     fn show_command_palette(&mut self, ctx: &egui::Context) {
@@ -732,6 +750,10 @@ impl Shell {
             PaletteAction::ScreenshotRegion => {
                 self.close_command_palette();
                 self.start_region_screenshot(ctx);
+            }
+            PaletteAction::CopyClipboard(id) => {
+                self.close_command_palette();
+                self.clipboard.copy(&id);
             }
             PaletteAction::SetStayAwake(awake) => {
                 self.close_command_palette();
