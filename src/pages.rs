@@ -2,7 +2,7 @@
 //! 坐标全部是面板局部逻辑点（419×140），文字 y 是基线。
 
 use crate::anim::{self, lerp, smoothstep, Spring};
-use crate::app::{App, Cmd, Env, Phase};
+use crate::app::{App, Cmd, Env, Phase, TimerMode};
 use crate::mail;
 use crate::paint::{self, capsule, mix, Card, H};
 use crate::smtc::Transport;
@@ -940,6 +940,163 @@ impl App {
         });
         if disk_hit.clicked() {
             self.pending.push(Cmd::Open(std::path::PathBuf::from("shell:MyComputerFolder")));
+        }
+    }
+    // ================= 计时（倒计时 / 秒表） =================
+    pub(crate) fn page_timer(&mut self, c: &Card) {
+        let running = self.timer.running;
+        let mode = self.timer.mode;
+        let display = self.timer.display();
+        let total = self.timer.total;
+        let progress = self.timer.progress();
+        let elapsed = self.timer.elapsed;
+        let accent = match mode {
+            TimerMode::Countdown => theme::CYAN,
+            TimerMode::Stopwatch => theme::GREEN,
+        };
+
+        // 模式切换
+        for (target, label, x, w) in [
+            (TimerMode::Countdown, "倒计时", 46.0, 72.0),
+            (TimerMode::Stopwatch, "秒表", 122.0, 58.0),
+        ] {
+            let selected = mode == target;
+            let (background, hover) = if selected {
+                (paint::mix(theme::CARD, accent, 0.28), paint::mix(theme::CARD, accent, 0.34))
+            } else {
+                (theme::BTN, theme::BTN_HOVER)
+            };
+            let id = match target {
+                TimerMode::Countdown => "timer-tab-countdown",
+                TimerMode::Stopwatch => "timer-tab-stopwatch",
+            };
+            let (response, tab) = capsule(c, x, 34.0, w, 22.0, id, background, hover);
+            tab.text(
+                x + w / 2.0,
+                49.0,
+                label,
+                10.5,
+                W::Semibold,
+                if selected { paint::mix(accent, theme::WHITE, 0.55) } else { theme::GRAY },
+                H::Center,
+            );
+            if response.clicked() {
+                self.timer.set_mode(target);
+            }
+        }
+
+        // 大号时间
+        if running {
+            c.glow(168.0, 74.0, 52.0, paint::alpha(accent, 0.16));
+        }
+        c.text(
+            168.0,
+            82.0,
+            &display,
+            30.0,
+            W::Bold,
+            if running { accent } else { theme::WHITE },
+            H::Center,
+        );
+        let label = match mode {
+            TimerMode::Countdown => format!("剩余 · 共 {} 分钟", (total / 60.0).round() as u32),
+            TimerMode::Stopwatch => "已计时".to_string(),
+        };
+        c.text(168.0, 96.0, &label, 9.5, W::Regular, theme::GRAY, H::Center);
+
+        // 进度条：倒计时显示已走过比例；秒表显示当前一分钟内的进度。
+        let fraction = match mode {
+            TimerMode::Countdown => (1.0 - progress).clamp(0.0, 1.0),
+            TimerMode::Stopwatch => ((elapsed % 60.0) / 60.0) as f32,
+        };
+        c.fill(96.0, 102.0, 144.0, 4.0, 2.0, Color32::from_gray(36));
+        if fraction > 0.005 {
+            c.fill(96.0, 102.0, (144.0 * fraction).max(4.0), 4.0, 2.0, accent);
+        }
+
+        // 主按钮：开始 / 暂停
+        let (button, button_card) = capsule(
+            c,
+            102.0,
+            108.0,
+            56.0,
+            22.0,
+            "timer-toggle",
+            if running { theme::BTN_HOVER } else { paint::mix(theme::CARD, accent, 0.30) },
+            if running { theme::BTN_HOVER } else { paint::mix(theme::CARD, accent, 0.42) },
+        );
+        button_card.text(
+            130.0,
+            122.0,
+            if running { "暂停" } else { "开始" },
+            10.5,
+            W::Semibold,
+            if running { theme::WHITE } else { paint::mix(accent, theme::WHITE, 0.55) },
+            H::Center,
+        );
+        if button.clicked() {
+            self.timer.toggle();
+        }
+
+        match mode {
+            TimerMode::Countdown => {
+                let (reset, reset_card) = capsule(c, 166.0, 108.0, 52.0, 22.0, "timer-reset", theme::BTN, theme::BTN_HOVER);
+                reset_card.text(192.0, 122.0, "重置", 10.0, W::Regular, theme::GRAY, H::Center);
+                if reset.on_hover_text("回到预设时长").clicked() {
+                    self.timer.reset();
+                }
+
+                // 右侧预设
+                c.fill(270.0, 34.0, 104.0, 90.0, 9.0, theme::CARD);
+                c.text(280.0, 48.0, "预设", 9.0, W::Semibold, theme::GRAY, H::Left);
+                for (index, minutes) in [5u32, 10, 25, 45].into_iter().enumerate() {
+                    let x = 278.0 + (index % 2) as f32 * 48.0;
+                    let y = 56.0 + (index / 2) as f32 * 26.0;
+                    let selected = (total / 60.0).round() as u32 == minutes;
+                    let response = c.hit(x, y, 44.0, 20.0, ("timer-preset", minutes));
+                    if response.hovered() || selected {
+                        c.fill(
+                            x,
+                            y,
+                            44.0,
+                            20.0,
+                            6.0,
+                            paint::mix(theme::CARD, accent, if selected { 0.22 } else { 0.10 }),
+                        );
+                    }
+                    let ink = if selected { paint::mix(accent, theme::WHITE, 0.55) } else { Color32::from_gray(190) };
+                    c.text(x + 22.0, y + 14.0, &format!("{minutes} 分"), 9.5, W::Regular, ink, H::Center);
+                    if response.clicked() {
+                        self.timer.set_preset(minutes);
+                    }
+                }
+            }
+            TimerMode::Stopwatch => {
+                let (lap, lap_card) = capsule(c, 166.0, 108.0, 52.0, 22.0, "timer-lap", theme::BTN, theme::BTN_HOVER);
+                lap_card.text(192.0, 122.0, "计次", 10.0, W::Regular, theme::GRAY, H::Center);
+                if lap.clicked() {
+                    self.timer.lap();
+                }
+
+                c.fill(270.0, 34.0, 104.0, 90.0, 9.0, theme::CARD);
+                c.text(280.0, 48.0, "分段时间", 9.0, W::Semibold, theme::GRAY, H::Left);
+                if self.timer.laps.is_empty() {
+                    c.text(280.0, 72.0, "还没有分段", 9.0, W::Regular, Color32::from_gray(110), H::Left);
+                } else {
+                    for (index, split) in self.timer.laps.iter().rev().take(3).enumerate() {
+                        let seconds = split.max(0.0).ceil() as u64;
+                        c.text(
+                            280.0,
+                            66.0 + index as f32 * 16.0,
+                            &format!("{}  {:02}:{:02}", self.timer.laps.len() - index, seconds / 60, seconds % 60),
+                            9.5,
+                            W::Regular,
+                            Color32::from_gray(190),
+                            H::Left,
+                        );
+                    }
+                }
+            }
         }
     }
 }

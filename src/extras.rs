@@ -951,7 +951,7 @@ impl App {
                         });
                         settings_label(ui,"功能页面");
                         settings_card(ui,|ui|{
-                            let descriptions=["播放控制与同步歌词","番茄钟与休息计时","饮水记录与提醒","临时收纳文件位置","任务清单与到期提醒","邮件摘要与验证码","Agent 剩余额度和账号切换","月历、邮件邀请与工作日程","CPU、内存、网络与磁盘实时状态"];
+                            let descriptions=["播放控制与同步歌词","番茄钟与休息计时","饮水记录与提醒","临时收纳文件位置","任务清单与到期提醒","邮件摘要与验证码","Agent 剩余额度和账号切换","月历、邮件邀请与工作日程","CPU、内存、网络与磁盘实时状态","倒计时与秒表"];
                             ui.label(egui::RichText::new("拖动左侧手柄调整顺序，松开后自动应用到岛。").size(11.5).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
                             #[derive(Clone)]
                             struct PageDrag(usize);
@@ -1040,6 +1040,12 @@ impl App {
                             setting_row(ui,"提醒声音","喝水、待办和专注提醒",&mut self.settings.sound);
                             ui.separator();
                             setting_row(ui,"全屏时隐藏","游戏、视频和演示全屏时隐藏",&mut self.settings.hide_fullscreen);
+                        });
+                        settings_label(ui,"防睡眠");
+                        settings_card(ui,|ui|{
+                            setting_row(ui,"阻止系统休眠","开启后保持系统与屏幕唤醒，适合演示、下载或长时间任务",&mut self.settings.stay_awake);
+                            ui.add_space(3.0);
+                            ui.label(egui::RichText::new("关闭岛仔或重新打开本开关后恢复系统原来的睡眠策略。").size(11.0).color(settings_color(ctx,Color32::from_gray(175),Color32::from_gray(95))));
                         });
                         settings_label(ui,"全局快捷键");
                         settings_card(ui,|ui|{

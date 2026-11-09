@@ -44,6 +44,10 @@ pub enum Action {
     ToggleFocus,
     OcrClipboard,
     CropOcr,
+    StartCountdown(u32),
+    ToggleTimer,
+    ResetTimer,
+    SetStayAwake(bool),
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -53,6 +57,9 @@ pub struct Snapshot {
     pub clipboard_enabled: bool,
     pub clipboard_paused: bool,
     pub focus_running: bool,
+    pub timer_running: bool,
+    pub timer_remaining: f64,
+    pub stay_awake: bool,
 }
 
 #[derive(Clone)]
@@ -303,6 +310,54 @@ impl Panel {
             Glyph::Scan,
             Action::CropOcr,
         ));
+        if snapshot.timer_running {
+            entries.push(action(
+                "action-timer-toggle",
+                "暂停计时",
+                &format!("当前剩余 {}", crate::world_clock::clock_label(snapshot.timer_remaining)),
+                "计时 倒计时 秒表 暂停 timer pause",
+                Glyph::Timer,
+                Action::ToggleTimer,
+            ));
+            entries.push(action(
+                "action-timer-reset",
+                "重置计时",
+                "把计时器恢复到初始状态",
+                "计时 倒计时 秒表 重置 timer reset",
+                Glyph::Timer,
+                Action::ResetTimer,
+            ));
+        } else {
+            for minutes in [5u32, 25] {
+                entries.push(action(
+                    &format!("action-timer-{minutes}"),
+                    &format!("开始 {minutes} 分钟倒计时"),
+                    "在岛上开始倒计时，收起时药丸时钟会显示剩余时间",
+                    "计时 倒计时 分钟 timer countdown",
+                    Glyph::Timer,
+                    Action::StartCountdown(minutes),
+                ));
+            }
+        }
+        if snapshot.stay_awake {
+            entries.push(action(
+                "action-stay-awake-off",
+                "关闭防睡眠",
+                "恢复系统默认的睡眠与息屏策略",
+                "防睡眠 休眠 息屏 caffeine stay awake sleep",
+                Glyph::Gear,
+                Action::SetStayAwake(false),
+            ));
+        } else {
+            entries.push(action(
+                "action-stay-awake-on",
+                "开启防睡眠",
+                "演示、下载或长时间任务期间保持唤醒",
+                "防睡眠 休眠 息屏 caffeine stay awake sleep",
+                Glyph::Gear,
+                Action::SetStayAwake(true),
+            ));
+        }
         entries.push(action(
             "action-calendar",
             "打开日程",
@@ -1237,6 +1292,17 @@ fn calculations(query: &str) -> Vec<Entry> {
             glyph: Glyph::Calc,
         });
     }
+    for (title, copy) in crate::world_clock::lookup(query) {
+        out.push(Entry {
+            id: format!("clock-{title}"),
+            section: Section::Calc,
+            title,
+            subtitle: "世界时钟 · Enter 复制时间".into(),
+            haystack: String::new(),
+            action: Action::CopyText(copy),
+            glyph: Glyph::Calc,
+        });
+    }
     out
 }
 
@@ -1624,6 +1690,9 @@ mod tests {
             clipboard_enabled: true,
             clipboard_paused: false,
             focus_running: false,
+            timer_running: false,
+            timer_remaining: 0.0,
+            stay_awake: false,
         }
     }
 
@@ -1775,6 +1844,25 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn timer_and_stay_awake_actions_are_searchable() {
+        let palette = palette_for_test("防睡眠");
+        assert!(
+            palette.results.iter().any(|entry| entry.action == Action::SetStayAwake(true)),
+            "应能搜索到开启防睡眠"
+        );
+        let palette = palette_for_test("分钟");
+        assert!(
+            palette.results.iter().any(|entry| matches!(entry.action, Action::StartCountdown(_))),
+            "应能搜索到倒计时"
+        );
+        let palette = palette_for_test("东京");
+        assert!(
+            palette.results.iter().any(|entry| entry.title.starts_with("东京")),
+            "世界时钟应出现在计算结果里"
+        );
+    }
+
     #[test]
     fn builtin_system_tools_are_searchable_while_typing() {
         let palette = palette_for_test("记事本");

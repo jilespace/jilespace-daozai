@@ -38,8 +38,8 @@ pub const RAD: f32 = 33.0; // 底部圆角
 pub const WIN_W: f32 = 640.0; // 窗口（透明画布）
 pub const CANVAS_W: f32 = WIN_W + 640.0; // 为右侧通知预留透明画布，原岛仍按 WIN_W 定位。
 pub const WIN_H: f32 = 270.0;
-pub(crate) const PAGE_NAMES: [&str; 9] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统"];
-pub(crate) const PAGE_DESCRIPTIONS: [&str; 9] = [
+pub(crate) const PAGE_NAMES: [&str; 10] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统", "计时"];
+pub(crate) const PAGE_DESCRIPTIONS: [&str; 10] = [
     "播放控制与同步歌词",
     "番茄钟与休息计时",
     "饮水记录与提醒",
@@ -49,6 +49,7 @@ pub(crate) const PAGE_DESCRIPTIONS: [&str; 9] = [
     "Agent 剩余额度和账号切换",
     "月历、邮件邀请与工作日程",
     "CPU、内存、网络与磁盘实时状态",
+    "倒计时与秒表",
 ];
 
 // ---------- 动效参数 ----------
@@ -313,6 +314,137 @@ impl CalendarState {
 
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TimerMode {
+    Countdown,
+    Stopwatch,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TimerState {
+    pub mode: TimerMode,
+    /// 倒计时预设时长（秒）。
+    pub total: f64,
+    /// 倒计时剩余（秒）。
+    pub remaining: f64,
+    /// 秒表已用（秒）。
+    pub elapsed: f64,
+    pub running: bool,
+    pub laps: Vec<f64>,
+    lap_start: f64,
+}
+
+impl Default for TimerState {
+    fn default() -> Self {
+        Self {
+            mode: TimerMode::Countdown,
+            total: 25.0 * 60.0,
+            remaining: 25.0 * 60.0,
+            elapsed: 0.0,
+            running: false,
+            laps: Vec::new(),
+            lap_start: 0.0,
+        }
+    }
+}
+
+impl TimerState {
+    /// 返回 `true` 表示倒计时刚刚结束。
+    pub(crate) fn tick(&mut self, seconds: f64) -> bool {
+        if !self.running || seconds <= 0.0 {
+            return false;
+        }
+        match self.mode {
+            TimerMode::Countdown => {
+                self.remaining = (self.remaining - seconds).max(0.0);
+                if self.remaining <= 0.0 {
+                    self.running = false;
+                    self.laps.clear();
+                    return true;
+                }
+            }
+            TimerMode::Stopwatch => self.elapsed += seconds,
+        }
+        false
+    }
+
+    pub(crate) fn toggle(&mut self) {
+        match self.mode {
+            TimerMode::Countdown => {
+                if self.remaining <= 0.0 {
+                    self.remaining = self.total;
+                }
+                self.running = !self.running;
+            }
+            TimerMode::Stopwatch => self.running = !self.running,
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.running = false;
+        match self.mode {
+            TimerMode::Countdown => self.remaining = self.total,
+            TimerMode::Stopwatch => {
+                self.elapsed = 0.0;
+                self.laps.clear();
+                self.lap_start = 0.0;
+            }
+        }
+    }
+
+    pub(crate) fn set_mode(&mut self, mode: TimerMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.running = false;
+        self.laps.clear();
+        self.lap_start = 0.0;
+        self.elapsed = 0.0;
+        self.remaining = self.total;
+    }
+
+    pub(crate) fn set_preset(&mut self, minutes: u32) {
+        self.mode = TimerMode::Countdown;
+        self.total = (minutes.clamp(1, 180) * 60) as f64;
+        self.remaining = self.total;
+        self.running = false;
+    }
+
+    pub(crate) fn lap(&mut self) {
+        if self.mode != TimerMode::Stopwatch {
+            return;
+        }
+        self.laps.push(self.elapsed - self.lap_start);
+        self.lap_start = self.elapsed;
+        if self.laps.len() > 3 {
+            self.laps.remove(0);
+        }
+    }
+
+    pub(crate) fn display(&self) -> String {
+        let seconds = match self.mode {
+            TimerMode::Countdown => self.remaining,
+            TimerMode::Stopwatch => self.elapsed,
+        }
+        .max(0.0)
+        .ceil() as u64;
+        if seconds >= 3600 {
+            format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)
+        } else {
+            format!("{:02}:{:02}", seconds / 60, seconds % 60)
+        }
+    }
+
+    pub(crate) fn progress(&self) -> f32 {
+        if self.total <= 0.0 {
+            0.0
+        } else {
+            (self.remaining / self.total).clamp(0.0, 1.0) as f32
+        }
+    }
+}
+
 pub(crate) struct SystemPageState {
     pub perf: crate::perf::Performance,
     pub history: crate::perf::History,
@@ -450,7 +582,7 @@ pub struct App {
     page_dir: f32,
     page_t0: f64,
     slide: Spring,
-    dots: [Spring; 9],
+    dots: [Spring; 10],
     wheel_delta: f32,
     wheel_at: f64,
     wheel_page_at: f64,
@@ -555,6 +687,8 @@ pub struct App {
     pub(crate) resident_power: (Option<u8>,bool),
     /// 系统页：采样快照、历史曲线与展示缓动。
     pub(crate) system: SystemPageState,
+    /// 计时页：倒计时与秒表。
+    pub(crate) timer: TimerState,
 }
 
 impl App {
@@ -650,6 +784,7 @@ impl App {
             updates: Default::default(),
             resident: Default::default(), resident_power:(None,false),
             system: SystemPageState::default(),
+            timer: TimerState::default(),
         }
     }
 
@@ -1047,7 +1182,7 @@ impl App {
 
     pub fn show_page(&mut self,page:usize) {
         if !self.settings.visible_pages[page] {
-            self.settings_tab=[1,2,3,5,4,7,11,8,10][page];
+            self.settings_tab=[1,2,3,5,4,7,11,8,10,10][page];
             self.open_settings();
             return;
         }
@@ -1077,7 +1212,40 @@ impl App {
             clipboard_enabled: self.settings.clipboard_enabled,
             clipboard_paused: self.settings.clipboard_paused,
             focus_running: self.pomo.running,
+            timer_running: self.timer.running,
+            timer_remaining: match self.timer.mode {
+                TimerMode::Countdown => self.timer.remaining,
+                TimerMode::Stopwatch => self.timer.elapsed,
+            },
+            stay_awake: self.settings.stay_awake,
         }
+    }
+
+    /// 命令面板用：开始一段指定分钟数的倒计时，并打开计时页。
+    pub fn start_countdown(&mut self, minutes: u32) {
+        self.timer.set_preset(minutes);
+        if !self.timer.running {
+            self.timer.toggle();
+        }
+        self.show_page(9);
+    }
+
+    /// 命令面板用：开始/暂停当前计时；返回是否正在计时。
+    pub fn toggle_timer(&mut self) -> bool {
+        self.timer.toggle();
+        self.timer.running
+    }
+
+    pub fn reset_timer(&mut self) {
+        self.timer.reset();
+    }
+
+    /// 录制/截图用：让计时页显示一个运行中的倒计时。
+    #[cfg(feature = "record")]
+    pub fn timer_demo(&mut self) {
+        self.timer.set_preset(15);
+        self.timer.remaining = 9.0 * 60.0 + 42.0;
+        self.timer.running = true;
     }
 
     /// 命令面板用：开始/暂停专注计时，并把岛体切到专注页。
@@ -1544,7 +1712,8 @@ impl App {
             || self.media.playing && (self.open && self.page==0 || !self.open && !minimal_pill && self.notice.is_none() && self.media.is_music())
             || self.notice.as_ref().is_some_and(|notice|notice.meeting.is_some())
             // 系统页的曲线与数字持续缓动，打开时保持 30 帧。
-            || self.open && self.page==8 && self.system.has_data();
+            || self.open && self.page==8 && self.system.has_data()
+            || self.timer.running;
         let animating=transitioning || ambient || pet_visible && self.pet.state!=PetState::Sleeping;
         // 交互形变保持 60 帧，媒体 30 帧；小表情 20 帧，睡眠 10 帧，静态界面每秒核对提醒。
         let repaint_after=std::time::Duration::from_secs_f64(if transitioning{1.0/60.0}else if ambient{1.0/30.0}else if pet_visible{if self.pet.state==PetState::Sleeping{0.1}else{0.05}}else{1.0});
@@ -1688,7 +1857,13 @@ impl App {
         let header=base.faded(1.0-lyric_alpha);
         let base=&header;
         let m = anim::ease_in_out(smoothstep(0.0, 0.85, p));
-        let clock = env.clock.get(..5).unwrap_or("--:--").to_string();
+        // 倒计时运行时，收起态直接把药丸时钟换成剩余时间，抬眼就能看见。
+        let timer_clock = self.timer.running && self.timer.mode == TimerMode::Countdown && !self.open;
+        let clock = if timer_clock {
+            self.timer.display()
+        } else {
+            env.clock.get(..5).unwrap_or("--:--").to_string()
+        };
         let show_battery=self.settings.show_battery && env.battery.is_some();
 
         // 顶栏终点布局：[电池][日期][时钟] 作为一组整体居中
@@ -1717,7 +1892,7 @@ impl App {
         let a_pill = (1.0 - smoothstep(0.25, 0.6, m)) * layout.clearance(bar::CLOCK);
         let a_head = smoothstep(0.35, 0.75, m);
         if a_pill > 0.0 {
-            base.faded(a_pill).text(cpos.0, cpos.1, &clock, size::PILL_CLOCK, W::Bold, theme::WHITE, H::Left);
+            base.faded(a_pill).text(cpos.0, cpos.1, &clock, size::PILL_CLOCK, W::Bold, if timer_clock { theme::CYAN } else { theme::WHITE }, H::Left);
         }
         if a_head > 0.0 {
             base.faded(a_head).text(cpos.0, cpos.1 - 0.5, &clock, size::CLOCK, W::Bold, theme::WHITE, H::Left);
@@ -1777,7 +1952,7 @@ impl App {
         let (hover,press)=c.hover_t(&settings);
         c.circle(394.0,18.0,13.0,Color32::from_white_alpha((hover*24.0) as u8));
         paint::gear(&c.scaled(394.0,18.0,0.8*(1.0-press*0.08)),394.0,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
-        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10][self.page];self.open_settings();}
+        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10,10][self.page];self.open_settings();}
         if self.subpage==Some(self.page) {
             c.text(15.0,25.0,"‹",19.0,W::Bold,theme::WHITE,H::Left);
             c.text(37.0,25.0,if self.page==2{"饮水设置"}else{"专注设置"},size::TITLE,W::Bold,theme::WHITE,H::Left);
@@ -1819,6 +1994,7 @@ impl App {
             5 => ("邮箱", "", theme::CYAN),
             6 => ("AI", "额度", theme::SOFT_GREEN),
             8 => ("系统", "状态", theme::CYAN),
+            9 => ("计时", "工具", theme::GREEN),
             _ => ("岛仔", "设置", theme::WHITE),
         };
         let wa = c.text(15.0, base, a, size::TITLE, W::Bold, theme::WHITE, H::Left);
@@ -1876,6 +2052,7 @@ impl App {
             5 => self.page_mail(c, env, cmds),
             6 => self.page_quota(c),
             8 => self.page_system(c, env),
+            9 => self.page_timer(c),
             CALENDAR_PAGE => self.page_calendar(c,env),
             _ => self.page_settings(c),
         }
@@ -1904,6 +2081,13 @@ impl App {
     // ---------------------------------------------------------------
     fn tick(&mut self, env: &Env, dt: f32, elapsed: f32) {
         self.system.update(env, dt);
+        if self.timer.tick(elapsed as f64) {
+            let label = match self.timer.mode {
+                TimerMode::Countdown => "倒计时结束",
+                TimerMode::Stopwatch => "计时结束",
+            };
+            self.alert(label, "时间到了，起来活动一下", 9, true);
+        }
         if self.toast.as_ref().is_some_and(|(_,at)|self.t-at>2.4){self.toast=None;}
         if env.today != self.today {
             self.today = env.today.clone();

@@ -32,6 +32,7 @@ cargo run --locked --bin daozai
 | `src/clipboard.rs`、`src/clipboard_ui.rs` | 剪贴板历史服务与快捷面板 |
 | `src/command_palette.rs`、`src/panel.rs` | 命令面板、应用检索、计算/换算与浮层视觉令牌 |
 | `src/perf.rs` | CPU／内存／网络／磁盘采样与格式化 |
+| `src/world_clock.rs` | 命令面板世界时钟与时区格式化 |
 | `src/ocr.rs` | 剪贴板图片读取、DIB 解析与 Windows 本地 OCR |
 | `src/region_capture.rs`、`src/capture_ui.rs` | 屏幕截取、框选遮罩与选区换算 |
 | `src/native.rs`、`src/system.rs` | 原生窗口、输入、拖放和系统事件 |

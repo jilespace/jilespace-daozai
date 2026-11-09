@@ -69,6 +69,8 @@ struct Shell {
     perf: daozai::perf::Sampler,
     perf_at: PollClock,
     perf_value: daozai::perf::Performance,
+    /// 当前已下发给系统的防睡眠状态。
+    stay_awake: bool,
 }
 
 impl Shell {
@@ -104,6 +106,11 @@ impl Shell {
             app.settings.clipboard_enabled && !app.settings.clipboard_paused;
         let clipboard_limit = app.settings.clipboard_limit as usize;
         let clipboard_days = app.settings.clipboard_days;
+        #[cfg(windows)]
+        if app.settings.stay_awake {
+            daozai::system::set_stay_awake(true);
+        }
+        let stay_awake = app.settings.stay_awake;
         let clipboard = daozai::clipboard::Service::start();
         clipboard.set_enabled(clipboard_enabled);
         clipboard.set_limits(clipboard_limit, clipboard_days);
@@ -155,6 +162,7 @@ impl Shell {
             perf: daozai::perf::Sampler::new(),
             perf_at: PollClock::default(),
             perf_value: Default::default(),
+            stay_awake,
         }
     }
 
@@ -568,6 +576,27 @@ impl Shell {
                 self.close_command_palette();
                 self.start_region_ocr(ctx);
             }
+            PaletteAction::StartCountdown(minutes) => {
+                self.close_command_palette();
+                self.app.start_countdown(minutes);
+                self.app.say(format!("开始 {minutes} 分钟倒计时"));
+            }
+            PaletteAction::ToggleTimer => {
+                self.close_command_palette();
+                let running = self.app.toggle_timer();
+                self.app.say(if running { "计时继续" } else { "计时已暂停" });
+            }
+            PaletteAction::ResetTimer => {
+                self.close_command_palette();
+                self.app.reset_timer();
+                self.app.say("计时已重置");
+            }
+            PaletteAction::SetStayAwake(awake) => {
+                self.close_command_palette();
+                self.app.settings.stay_awake = awake;
+                self.app.settings.save();
+                self.app.say(if awake { "已开启防睡眠" } else { "已关闭防睡眠" });
+            }
         }
     }
 
@@ -623,6 +652,12 @@ impl eframe::App for Shell {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.app.settings.stay_awake != self.stay_awake {
+            self.stay_awake = self.app.settings.stay_awake;
+            #[cfg(windows)]
+            daozai::system::set_stay_awake(self.stay_awake);
+            self.app.say(if self.stay_awake { "已开启防睡眠" } else { "已关闭防睡眠" });
+        }
         #[cfg(windows)]
         {
             // 用帧间隔限制刷新，绕过部分 Intel 驱动在垂直同步中的忙等待。

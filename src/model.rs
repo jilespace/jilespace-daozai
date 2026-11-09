@@ -89,8 +89,8 @@ pub struct Settings {
     pub pet: bool,
     pub minimal: bool,
     pub browser_minimal: bool,
-    pub visible_pages: [bool; 9],
-    pub page_order: [usize; 9],
+    pub visible_pages: [bool; 10],
+    pub page_order: [usize; 10],
     pub show_battery: bool,
     pub resident_order: Vec<usize>,
     pub system_hud: bool,
@@ -121,11 +121,13 @@ pub struct Settings {
     pub clipboard_paused: bool,
     pub clipboard_limit: u32,
     pub clipboard_days: u32,
+    /// 防睡眠：阻止系统休眠与息屏。
+    pub stay_awake: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true; 9], page_order: [0,1,2,3,4,5,6,7,8], show_battery: true, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7 }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true; 10], page_order: [0,1,2,3,4,5,6,7,8,9], show_battery: true, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, stay_awake: false }
     }
 }
 
@@ -144,15 +146,16 @@ impl Settings {
                 }
                 "page_order" => {
                     if let Ok(mut order)=v.split(',').map(str::parse::<usize>).collect::<Result<Vec<_>,_>>() {
-                        // 旧版本的顺序没有「系统」页：保留用户顺序，把新页接在最后。
-                        if order.len()==8 && (0..8).all(|page|order.contains(&page)) { order.push(8); }
-                        if order.len()==9 && (0..9).all(|page|order.contains(&page)) {
+                        // 旧版本的顺序没有「系统」「计时」页：保留用户顺序，把新页接在最后。
+                        if order.len()==8 && (0..8).all(|page|order.contains(&page)) { order.extend([8,9]); }
+                        else if order.len()==9 && (0..9).all(|page|order.contains(&page)) { order.push(9); }
+                        if order.len()==10 && (0..10).all(|page|order.contains(&page)) {
                             s.page_order.copy_from_slice(&order);
                         }
                     }
                 }
                 "show_battery" => s.show_battery = v != "0",
-                "visible_pages" if (6..=9).contains(&v.len()) && v.bytes().all(|b| b==b'0' || b==b'1') => {
+                "visible_pages" if (6..=10).contains(&v.len()) && v.bytes().all(|b| b==b'0' || b==b'1') => {
                     for (enabled,value) in s.visible_pages.iter_mut().zip(v.bytes()) { *enabled=value==b'1'; }
                     for enabled in &mut s.visible_pages[v.len()..]{*enabled=v.bytes().any(|b|b==b'1');}
                 }
@@ -185,6 +188,7 @@ impl Settings {
                 "clipboard_days" => {
                     s.clipboard_days = v.parse::<u32>().unwrap_or(7).clamp(1, 30)
                 }
+                "stay_awake" => s.stay_awake = v == "1",
                 _ => {}
             }
         }
@@ -229,6 +233,7 @@ impl Settings {
                 ("clipboard_paused".into(), (self.clipboard_paused as u8).to_string()),
                 ("clipboard_limit".into(), self.clipboard_limit.to_string()),
                 ("clipboard_days".into(), self.clipboard_days.to_string()),
+                ("stay_awake".into(), (self.stay_awake as u8).to_string()),
             ],
         );
     }

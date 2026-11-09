@@ -488,3 +488,17 @@ mod tests {
         }
     }
 }
+/// 防睡眠：开启时阻止系统休眠与息屏；关闭时恢复默认策略。
+pub fn set_stay_awake(awake: bool) {
+    use windows::Win32::System::Power::{
+        SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
+    };
+    let flags = if awake {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    unsafe {
+        let _ = SetThreadExecutionState(flags);
+    }
+}
