@@ -64,6 +64,9 @@ struct Shell {
     ocr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 框选取字：整屏位图、目标显示器与全屏遮罩。
     capture_overlay: daozai::capture_ui::Overlay,
+    /// 通知历史面板与数据版本。
+    notifications_popup: daozai::notifications_ui::Popup,
+    notifications_rev: u64,
     capture_image: Option<daozai::ocr::Image>,
     capture_monitor: Option<daozai::region_capture::MonitorRect>,
     command_palette: daozai::command_palette::Panel,
@@ -160,6 +163,8 @@ impl Shell {
             clipboard_status: String::new(),
             ocr_rx: None,
             capture_overlay: Default::default(),
+            notifications_popup: Default::default(),
+            notifications_rev: 0,
             capture_image: None,
             capture_monitor: None,
             command_palette: daozai::command_palette::Panel::default(),
@@ -182,6 +187,7 @@ impl Shell {
                 Event::OpenCommandPalette=>self.open_command_palette(ctx),
                 Event::OcrClipboard=>self.run_ocr(ctx),
                 Event::CropOcr=>self.start_region_ocr(ctx),
+                Event::OpenNotifications=>self.open_notifications(ctx),
                 Event::TogglePet => {
                     self.app.set_pet(!self.app.settings.pet);
                     self.app.say(if self.app.settings.pet { "吉祥物已打开" } else { "吉祥物已关闭" });
@@ -208,6 +214,7 @@ impl Shell {
     }
 
     fn open_clipboard(&mut self, ctx: &egui::Context, restore: bool) {
+        self.close_notifications();
         self.command_palette.close();
         #[cfg(windows)]
         {
@@ -316,6 +323,82 @@ impl Shell {
             self.app.settings.clipboard_paused,
             hotkey_error,
         );
+    }
+
+    fn notification_status(&self) -> String {
+        let base = if self.incoming.is_some() {
+            if self.app.listener_status.trim().is_empty() {
+                "正在监听 Windows 通知".to_string()
+            } else {
+                self.app.listener_status.clone()
+            }
+        } else {
+            "未连接 Windows 通知 · 在「设置 → 通知」连接".to_string()
+        };
+        if self.app.settings.notifications {
+            base
+        } else {
+            format!("岛上提醒已关闭 · {base}")
+        }
+    }
+
+    fn open_notifications(&mut self, ctx: &egui::Context) {
+        if self.capture_overlay.open {
+            return;
+        }
+        if self.notifications_popup.is_open() {
+            self.close_notifications();
+            return;
+        }
+        self.close_clipboard(false);
+        self.command_palette.close();
+        self.app.notifications_mark_seen();
+        self.notifications_popup.open(
+            self.app.notifications_snapshot(),
+            self.app.notifications_unread(),
+            self.notification_status(),
+        );
+        self.notifications_rev = self.app.notifications_revision();
+        ctx.request_repaint();
+    }
+
+    fn close_notifications(&mut self) {
+        self.notifications_popup.close();
+    }
+
+    fn show_notifications(&mut self, ctx: &egui::Context) {
+        if !self.notifications_popup.is_open() {
+            return;
+        }
+        let revision = self.app.notifications_revision();
+        if revision != self.notifications_rev {
+            self.notifications_rev = revision;
+            self.notifications_popup.sync(
+                self.app.notifications_snapshot(),
+                self.app.notifications_unread(),
+            );
+        }
+        let dark = daozai::settings_theme::system_dark(ctx);
+        match self.notifications_popup.show(ctx, dark) {
+            daozai::notifications_ui::Action::None => {}
+            daozai::notifications_ui::Action::Close => self.close_notifications(),
+            daozai::notifications_ui::Action::Copy(text) => {
+                ctx.copy_text(text);
+                self.app.say("已复制通知内容");
+            }
+            daozai::notifications_ui::Action::Delete(id) => {
+                self.app.notifications_delete(&id);
+                self.notifications_popup.sync(
+                    self.app.notifications_snapshot(),
+                    self.app.notifications_unread(),
+                );
+            }
+            daozai::notifications_ui::Action::Clear => {
+                self.app.notifications_clear();
+                self.notifications_popup.sync(Vec::new(), 0);
+                self.app.say("已清空通知历史");
+            }
+        }
     }
 
     fn show_clipboard(&mut self, ctx: &egui::Context) {
@@ -497,6 +580,7 @@ impl Shell {
     }
 
     fn open_command_palette(&mut self, ctx: &egui::Context) {
+        self.close_notifications();
         // 两个浮层互斥：同时打开会互相抢焦点。
         if self.clipboard_popup.open {
             self.close_clipboard(false);
@@ -600,6 +684,10 @@ impl Shell {
                 self.app.request_weather_refresh();
                 self.app.say("正在刷新天气…");
             }
+            PaletteAction::OpenNotifications => {
+                self.close_command_palette();
+                self.open_notifications(ctx);
+            }
             PaletteAction::SetStayAwake(awake) => {
                 self.close_command_palette();
                 self.app.settings.stay_awake = awake;
@@ -683,6 +771,7 @@ impl eframe::App for Shell {
             let clipboard_hotkey = daozai::native::take_clipboard_hotkey();
             let command_hotkey = daozai::native::take_command_hotkey();
             let image_ocr = daozai::native::take_ocr_hotkey();
+            let notification_hotkey = daozai::native::take_notification_hotkey();
             if screen_ocr {
                 self.start_region_ocr(ctx);
             } else if !self.capture_overlay.open {
@@ -702,6 +791,9 @@ impl eframe::App for Shell {
                 }
                 if image_ocr {
                     self.run_ocr(ctx);
+                }
+                if notification_hotkey {
+                    self.open_notifications(ctx);
                 }
             }
         }
@@ -874,6 +966,7 @@ impl eframe::App for Shell {
                 Cmd::Focus => ctx.send_viewport_cmd(egui::ViewportCommand::Focus),
                 Cmd::ClipboardClear => self.clipboard.clear(),
                 Cmd::WeatherRefresh => self.weather.refresh(),
+                Cmd::OpenNotifications => self.open_notifications(ctx),
             }
         }
 
@@ -884,10 +977,11 @@ impl eframe::App for Shell {
         self.app.mail_reader_ui(ctx);
         self.show_clipboard(ctx);
         self.show_command_palette(ctx);
+        self.show_notifications(ctx);
         self.show_capture_overlay(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after

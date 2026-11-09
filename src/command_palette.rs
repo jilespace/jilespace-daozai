@@ -49,6 +49,7 @@ pub enum Action {
     ResetTimer,
     SetStayAwake(bool),
     RefreshWeather,
+    OpenNotifications,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -370,6 +371,14 @@ impl Panel {
                 Action::RefreshWeather,
             ));
         }
+        entries.push(action(
+            "action-notifications",
+            "通知历史",
+            "查看最近的 Windows 通知与提醒",
+            "通知 历史 notification history alert",
+            Glyph::Gear,
+            Action::OpenNotifications,
+        ));
         entries.push(action(
             "action-calendar",
             "打开日程",
@@ -1859,6 +1868,15 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn notification_history_action_is_searchable() {
+        let palette = palette_for_test("通知");
+        assert!(
+            palette.results.iter().any(|entry| entry.action == Action::OpenNotifications),
+            "应能搜索到通知历史"
+        );
+    }
+
     #[test]
     fn weather_refresh_action_is_searchable_when_enabled() {
         let mut snapshot = snapshot();

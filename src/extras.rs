@@ -225,11 +225,22 @@ impl App {
         }
     }
     pub fn receive_notification(&mut self, app:String, id:String, body:String){
-        if self.history.iter().any(|a|format!("{} · {}",a.title,a.body)==body){return;}
-        let id=if id.is_empty(){app.clone()}else{id};
-        if !self.notification_apps.observe(&id,&app) || !self.settings.notifications {return;}
+        let body=body.trim().to_string();
+        if body.is_empty() {return;}
+        // Windows 会回显岛仔自己发出的提醒：命中已有提醒正文时不重复入库。
+        if self.history.iter().any(|a|format!("{} · {}",a.title,a.body)==body) {return;}
+        let id=if id.trim().is_empty(){format!("{app}:{body}")}else{id};
+        if !self.notification_apps.observe(&id,&app) {return;}
+        // 先写入通知历史（即使提醒被关掉也保留记录），再去铃铛与镜像横幅。
+        if self.notifications.push(app.clone(),id.clone(),body.clone()) {
+            self.notifications_revision=self.notifications_revision.wrapping_add(1);
+        }
+        if !self.settings.notifications {return;}
         self.notification_bell_at=self.t;
-        self.notification_bell_until=self.t+4.5;
+        self.notification_bell_until=self.t+6.0;
+        // 用岛内横幅镜像 Windows 通知；点击「查看」打开通知历史。
+        let alert=Alert{title:app,body,page:usize::MAX,at:self.t,duration:8.0,bluetooth:None,meeting:None};
+        self.enqueue_alert(alert,false);
     }
     pub(crate) fn tick_alerts(&mut self) {
         if self
@@ -339,7 +350,7 @@ impl App {
                                 self.todo_first=index.min(self.todos.items.len().saturating_sub(3));
                             }
                         }
-                    }else{self.settings_tab=6;self.open_settings();}
+                    }else if a.page >= crate::app::PAGE_NAMES.len() {self.open_notifications_panel();}else{self.settings_tab=6;self.open_settings();}
                 }
             }
         }
@@ -1404,8 +1415,12 @@ impl App {
                         settings_label(ui,"应用通知");
                         settings_card(ui,|ui|{
                             ui.label(egui::RichText::new(&self.listener_status).size(13.0));
-                            if ui.add_sized([150.0,32.0],egui::Button::new(if self.settings.read_notifications{"断开系统通知"}else{"连接 Windows 通知"})).clicked(){self.pending.push(if self.settings.read_notifications{Cmd::DisconnectNotifications}else{Cmd::RequestNotifications});}
-                            ui.label(egui::RichText::new("新通知到达时，刘海右侧会短暂显示铃铛。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
+                            ui.horizontal(|ui|{
+                                if ui.add_sized([150.0,32.0],egui::Button::new(if self.settings.read_notifications{"断开系统通知"}else{"连接 Windows 通知"})).clicked(){self.pending.push(if self.settings.read_notifications{Cmd::DisconnectNotifications}else{Cmd::RequestNotifications});}
+                                ui.add_space(8.0);
+                                if ui.add_sized([120.0,32.0],egui::Button::new("查看通知历史")).clicked(){self.pending.push(Cmd::OpenNotifications);}
+                            });
+                            ui.label(egui::RichText::new("新通知会镜像到岛上并保存在通知历史里；随时可按 Ctrl+Alt+N 打开。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
                             ui.separator();
                             ui.label(egui::RichText::new("收到通知的应用会出现在这里，可分别开启或关闭。").size(12.0).color(settings_color(ctx,Color32::from_gray(180),Color32::from_gray(75))));
                             let before_apps=self.notification_apps.items.clone();

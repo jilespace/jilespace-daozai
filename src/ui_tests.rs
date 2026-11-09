@@ -95,6 +95,35 @@ fn sample_weather() -> crate::weather::Weather {
 }
 
 #[test]
+fn system_notifications_are_stored_and_mirrored_to_the_island() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings.notifications=true;
+    h.app.receive_notification("微信".into(),"wechat-1".into(),"项目群里有人 @ 你".into());
+    let items=h.app.notifications_snapshot();
+    assert_eq!(items.len(),1);
+    assert_eq!(items[0].app,"微信");
+    assert_eq!(h.app.notifications_unread(),1);
+    h.frame(vec![]);
+    // 岛上横幅镜像，点击「查看」会打开通知历史。
+    let notice=h.app.notice.as_ref().expect("应显示通知横幅");
+    assert_eq!(notice.title,"微信");
+    assert_eq!(notice.page,usize::MAX);
+    // 重复回调不会新增条目。
+    h.app.receive_notification("微信".into(),"wechat-1".into(),"项目群里有人 @ 你".into());
+    assert_eq!(h.app.notifications_snapshot().len(),1);
+    // 打开面板后视为已读，可删除与清空。
+    h.app.notifications_mark_seen();
+    assert_eq!(h.app.notifications_unread(),0);
+    let id=h.app.notifications_snapshot()[0].id.clone();
+    h.app.notifications_delete(&id);
+    assert!(h.app.notifications_snapshot().is_empty());
+    h.app.receive_notification("Outlook".into(),"mail-1".into(),"周会提醒".into());
+    h.app.notifications_clear();
+    assert!(h.app.notifications_snapshot().is_empty());
+}
+
+#[test]
 fn weather_page_shows_forecast_and_falls_back_gracefully() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
@@ -2163,8 +2192,8 @@ fn repeated_system_changes_merge_without_losing_history(){
 fn windows_notification_echo_does_not_duplicate_own_reminders(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.frame(vec![]);
     h.app.alert("喝水时间到了","喝点水吧",2,true);
-    h.app.receive_notification("Windows 通知".into(),"test".into(),"喝水时间到了 · 喝点水吧".into());assert_eq!(h.app.history.len(),1);
-    h.app.notification_apps.items.push(("mail".into(),"邮件".into(),true));h.app.receive_notification("邮件".into(),"mail".into(),"收到一封新邮件".into());assert_eq!(h.app.alerts.len(),1);assert!(h.app.notification_bell_until>h.app.t);
+    h.app.receive_notification("Windows 通知".into(),"test".into(),"喝水时间到了 · 喝点水吧".into());assert_eq!(h.app.history.len(),1);assert!(h.app.notifications_snapshot().is_empty(),"回显不应写入通知历史");
+    h.app.notification_apps.items.push(("mail".into(),"邮件".into(),true));h.app.receive_notification("邮件".into(),"mail".into(),"收到一封新邮件".into());assert_eq!(h.app.alerts.len(),2,"原提醒 + 镜像横幅");assert!(h.app.notification_bell_until>h.app.t);
 }
 
 #[test]
@@ -2351,10 +2380,10 @@ fn collapsed_focus_animates_without_music_or_mascot_and_stops_in_minimal_mode(){
 fn app_notifications_show_temporary_bell_in_minimal_mode(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();h.app.settings.minimal=true;h.frame(vec![]);
     h.app.receive_notification("邮件".into(),"mail.app".into(),"私人内容".into());
-    assert!(h.app.notification_apps.items[0].2);assert!(h.app.notification_bell_until>h.app.t);assert!(h.app.alerts.is_empty());
+    assert!(h.app.notification_apps.items[0].2);assert!(h.app.notification_bell_until>h.app.t);assert_eq!(h.app.alerts.len(),1,"镜像横幅应排队");
     assert!(!std::fs::read_to_string(crate::model::config_dir().join("notification-apps.json")).unwrap().contains("私人内容"));
     for _ in 0..90 {h.frame(vec![]);}assert!(h.region.height()>20.0,"极简模式收到通知时应临时展开");
-    h.t+=5.0;for _ in 0..90 {h.frame(vec![]);}assert!(h.region.height()<20.0,"铃铛消失后应恢复极简模式");
+    h.t+=10.0;for _ in 0..90 {h.frame(vec![]);}assert!(h.region.height()<20.0,"铃铛与横幅消失后应恢复极简模式");
     h.app.notification_apps.items[0].2=false;let until=h.app.notification_bell_until;
     h.app.receive_notification("邮件".into(),"mail.app".into(),"私人内容".into());assert_eq!(h.app.notification_bell_until,until);
 }

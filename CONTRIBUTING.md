@@ -34,6 +34,7 @@ cargo run --locked --bin daozai
 | `src/perf.rs` | CPU／内存／网络／磁盘采样与格式化 |
 | `src/world_clock.rs` | 命令面板世界时钟与时区格式化 |
 | `src/weather.rs` | Open-Meteo 天气解析、缓存与后台刷新服务 |
+| `src/notifications.rs`、`src/notifications_ui.rs` | 通知历史存储与通知面板 |
 | `src/ocr.rs` | 剪贴板图片读取、DIB 解析与 Windows 本地 OCR |
 | `src/region_capture.rs`、`src/capture_ui.rs` | 屏幕截取、框选遮罩与选区换算 |
 | `src/native.rs`、`src/system.rs` | 原生窗口、输入、拖放和系统事件 |

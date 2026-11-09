@@ -163,6 +163,7 @@ pub enum Cmd {
     /// 清空剪贴板历史。
     ClipboardClear,
     WeatherRefresh,
+    OpenNotifications,
 }
 
 pub struct FrameOut {
@@ -700,6 +701,10 @@ pub struct App {
     pub(crate) timer: TimerState,
     /// 天气页：最近一次成功数据、错误与加载状态。
     pub(crate) weather: WeatherState,
+    /// 通知历史：Windows 通知镜像，持久化到本机。
+    pub(crate) notifications: crate::notifications::Store,
+    /// 通知历史版本号；外壳据此判断是否需要刷新面板。
+    pub(crate) notifications_revision: u64,
 }
 
 impl App {
@@ -798,6 +803,8 @@ impl App {
             system: SystemPageState::default(),
             timer: TimerState::default(),
             weather: WeatherState::default(),
+            notifications: crate::notifications::Store::load(),
+            notifications_revision: 0,
         }
     }
 
@@ -1233,6 +1240,39 @@ impl App {
             stay_awake: self.settings.stay_awake,
             weather_enabled: self.settings.weather_enabled,
         }
+    }
+
+    /// 通知历史快照（按时段渲染用）与未读数。
+    pub fn notifications_snapshot(&self) -> Vec<crate::notifications::Notification> {
+        self.notifications.items.clone()
+    }
+
+    pub fn notifications_unread(&self) -> usize {
+        self.notifications.unread()
+    }
+
+    pub fn notifications_revision(&self) -> u64 {
+        self.notifications_revision
+    }
+
+    pub fn notifications_mark_seen(&mut self) {
+        self.notifications.mark_seen();
+        self.notifications_revision = self.notifications_revision.wrapping_add(1);
+    }
+
+    pub fn notifications_delete(&mut self, id: &str) {
+        self.notifications.remove(id);
+        self.notifications_revision = self.notifications_revision.wrapping_add(1);
+    }
+
+    pub fn notifications_clear(&mut self) {
+        self.notifications.clear();
+        self.notifications_revision = self.notifications_revision.wrapping_add(1);
+    }
+
+    /// 请求外壳打开通知历史面板。
+    pub fn open_notifications_panel(&mut self) {
+        self.pending.push(Cmd::OpenNotifications);
     }
 
     /// 天气服务事件：失败时保留上一次成功数据，只记录错误。
@@ -1738,7 +1778,7 @@ impl App {
             }else if self.t<self.notification_bell_until {
                 paint::bell(&c.scaled(20.0,14.0,1.2),20.0,14.0,theme::WHITE,paint::bell_swing(self.t-self.notification_bell_at));
                 c.circle(24.0,9.5,2.0,Color32::from_rgb(255,72,72));
-                if c.hit(6.0,0.0,28.0,30.0,"bell-mail").clicked(){self.show_page(5);}
+                if c.hit(6.0,0.0,28.0,30.0,"bell-mail").clicked(){self.open_notifications_panel();}
             }
         }
         let notice_details=self.notice_details_rect(cx,top);
@@ -2009,7 +2049,7 @@ impl App {
             if let Some(x)=layout.x[bar::BELL]{
                 let x=local_cx+x;paint::bell(&base.scaled(x,14.0,1.2),x,14.0,theme::WHITE,paint::bell_swing(self.t-self.notification_bell_at));
                 base.circle(x+4.0,9.5,2.0,Color32::from_rgb(255,72,72));
-                if base.hit(x-14.0,3.0,28.0,25.0,"bell-mail").clicked(){self.show_page(5);}
+                if base.hit(x-14.0,3.0,28.0,25.0,"bell-mail").clicked(){self.open_notifications_panel();}
             }
         }
         if compact_alpha>0.004 {

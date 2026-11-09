@@ -43,6 +43,9 @@ static OCR_HOTKEY: AtomicBool = AtomicBool::new(false);
 /// 全局框选取字热键。
 const CROP_HOTKEY_ID: i32 = 0xDA0D;
 static CROP_HOTKEY: AtomicBool = AtomicBool::new(false);
+/// 全局通知历史热键。
+const NOTIFICATION_HOTKEY_ID: i32 = 0xDA0E;
+static NOTIFICATION_HOTKEY: AtomicBool = AtomicBool::new(false);
 
 // `WS_EX_NOREDIRECTIONBITMAP` 只能在 CreateWindowEx 时设置（运行时 SetWindowLongPtrW
 // 会回 ERROR_INVALID_PARAMETER），本项目用 GL 合成窗口，加上这一位后画面上什么都
@@ -107,6 +110,10 @@ unsafe extern "system" fn subclass(
     }
     if msg == WM_HOTKEY && wp.0 as i32 == CROP_HOTKEY_ID {
         CROP_HOTKEY.store(true, Ordering::Relaxed);
+        return LRESULT(0);
+    }
+    if msg == WM_HOTKEY && wp.0 as i32 == NOTIFICATION_HOTKEY_ID {
+        NOTIFICATION_HOTKEY.store(true, Ordering::Relaxed);
         return LRESULT(0);
     }
     if msg == WM_MOUSEACTIVATE
@@ -278,6 +285,37 @@ pub fn take_crop_hotkey() -> bool {
 #[cfg(test)]
 pub(crate) fn test_crop_hotkey_press() {
     CROP_HOTKEY.store(true, Ordering::Relaxed);
+}
+
+pub fn register_notification_hotkey(hwnd: HWND) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+    };
+    unsafe {
+        RegisterHotKey(
+            hwnd,
+            NOTIFICATION_HOTKEY_ID,
+            HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_ALT.0 | MOD_NOREPEAT.0),
+            'N' as u32,
+        )
+        .map_err(|_| "全局热键 Ctrl+Alt+N 被其他程序占用".to_string())
+    }
+}
+
+pub fn unregister_notification_hotkey(hwnd: HWND) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
+    unsafe {
+        let _ = UnregisterHotKey(hwnd, NOTIFICATION_HOTKEY_ID);
+    }
+}
+
+pub fn take_notification_hotkey() -> bool {
+    NOTIFICATION_HOTKEY.swap(false, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn test_notification_hotkey_press() {
+    NOTIFICATION_HOTKEY.store(true, Ordering::Relaxed);
 }
 
 pub fn foreground_window() -> Option<HWND> {
@@ -506,6 +544,7 @@ pub struct Window {
     pub command_hotkey_error: Option<String>,
     pub ocr_hotkey_error: Option<String>,
     pub crop_hotkey_error: Option<String>,
+    pub notification_hotkey_error: Option<String>,
 }
 
 impl Window {
@@ -529,7 +568,8 @@ impl Window {
         let command_hotkey_error = register_command_hotkey(hwnd).err();
         let ocr_hotkey_error = register_ocr_hotkey(hwnd).err();
         let crop_hotkey_error = register_crop_hotkey(hwnd).err();
-        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error, command_hotkey_error, ocr_hotkey_error, crop_hotkey_error })
+        let notification_hotkey_error = register_notification_hotkey(hwnd).err();
+        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error, command_hotkey_error, ocr_hotkey_error, crop_hotkey_error, notification_hotkey_error })
     }
 
     pub fn browser_at_top(&mut self)->Option<bool> {
@@ -590,6 +630,7 @@ impl Drop for Window {
         unregister_command_hotkey(self.hwnd);
         unregister_ocr_hotkey(self.hwnd);
         unregister_crop_hotkey(self.hwnd);
+        unregister_notification_hotkey(self.hwnd);
         unsafe {
             let _ = RemoveWindowSubclass(self.hwnd, Some(subclass), SUBCLASS_ID);
             if !self.hook.is_invalid() {
@@ -697,7 +738,7 @@ mod tests {
             assert!(above(cover.0,island.0),"先复现其他窗口盖住岛体");
             let foreground=GetForegroundWindow();
             let saved=hit().lock().unwrap_or_else(|e|e.into_inner()).clone();
-            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None,command_hotkey_error:None,ocr_hotkey_error:None,crop_hotkey_error:None};
+            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None,command_hotkey_error:None,ocr_hotkey_error:None,crop_hotkey_error:None,notification_hotkey_error:None};
             let update=|native:&mut Window,expanded|native.update((0.0,0.0,416.0,140.0),(0.0,0.0,416.0,140.0),None,None,1.0,false,expanded);
             update(&mut native,true);
             assert!(above(island.0,cover.0),"展开时必须重新抬高实际窗口层级，不能只检查置顶标记");
@@ -835,6 +876,13 @@ mod tests {
         test_crop_hotkey_press();
         assert!(take_crop_hotkey());
         assert!(!take_crop_hotkey());
+    }
+
+    #[test]
+    fn notification_hotkey_flag_is_consumed_once() {
+        test_notification_hotkey_press();
+        assert!(take_notification_hotkey());
+        assert!(!take_notification_hotkey());
     }
 
     #[test]
