@@ -50,6 +50,8 @@ struct Shell {
     cal_sig: (Vec<daozai::calendar::Config>, bool),
     weather: daozai::weather::Service,
     weather_sig: (bool, String, u32),
+    /// 进程排行采样：只在进程页可见时运行。
+    processes: Option<daozai::processes::Service>,
     /// 音频可视化服务：开启设置时才启动。
     audio: Option<daozai::audio::Service>,
     audio_visualizer: bool,
@@ -166,6 +168,7 @@ impl Shell {
             cal_sig: (Vec::new(), true),
             weather: daozai::weather::Service::start(),
             weather_sig: (false, String::new(), 0),
+            processes: None,
             audio: if audio_visualizer { Some(daozai::audio::Service::start()) } else { None },
             audio_visualizer,
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
@@ -1005,6 +1008,17 @@ impl eframe::App for Shell {
                     daozai::audio::Event::Spectrum(spectrum) => self.app.audio_spectrum(spectrum),
                     daozai::audio::Event::Unavailable(message) => self.app.say(format!("音频可视化不可用：{message}")),
                 }
+            }
+        }
+        let want_processes = self.app.process_page_active();
+        if want_processes && self.processes.is_none() {
+            self.processes = Some(daozai::processes::Service::start());
+        } else if !want_processes {
+            self.processes = None;
+        }
+        if let Some(service) = self.processes.as_ref() {
+            while let Some(snapshot) = service.try_recv() {
+                self.app.processes_event(snapshot);
             }
         }
         #[cfg(feature="record")] let quota_demo=std::env::var("DAOZAI_QUOTA_DEMO").is_ok();

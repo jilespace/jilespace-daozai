@@ -38,8 +38,8 @@ pub const RAD: f32 = 33.0; // 底部圆角
 pub const WIN_W: f32 = 640.0; // 窗口（透明画布）
 pub const CANVAS_W: f32 = WIN_W + 640.0; // 为右侧通知预留透明画布，原岛仍按 WIN_W 定位。
 pub const WIN_H: f32 = 270.0;
-pub(crate) const PAGE_NAMES: [&str; 11] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统", "计时", "天气"];
-pub(crate) const PAGE_DESCRIPTIONS: [&str; 11] = [
+pub(crate) const PAGE_NAMES: [&str; 12] = ["音乐", "专注", "饮水", "置物架", "待办", "邮箱", "AI 额度", "日程", "系统", "计时", "天气", "进程"];
+pub(crate) const PAGE_DESCRIPTIONS: [&str; 12] = [
     "播放控制与同步歌词",
     "番茄钟与休息计时",
     "饮水记录与提醒",
@@ -51,6 +51,7 @@ pub(crate) const PAGE_DESCRIPTIONS: [&str; 11] = [
     "CPU、内存、网络与磁盘实时状态",
     "倒计时与秒表",
     "当前天气与逐小时预报",
+    "按 CPU 与内存排列的进程",
 ];
 
 // ---------- 动效参数 ----------
@@ -592,7 +593,7 @@ pub struct App {
     page_dir: f32,
     page_t0: f64,
     slide: Spring,
-    dots: [Spring; 11],
+    dots: [Spring; 12],
     wheel_delta: f32,
     wheel_at: f64,
     wheel_page_at: f64,
@@ -701,6 +702,8 @@ pub struct App {
     pub(crate) timer: TimerState,
     /// 天气页：最近一次成功数据、错误与加载状态。
     pub(crate) weather: WeatherState,
+    /// 进程页：最近一次进程排行快照。
+    pub(crate) processes: crate::processes::Snapshot,
     /// 天气页右侧卡片：`true` 显示多日预报，`false` 显示逐小时。
     pub(crate) weather_days: bool,
     /// 最近一帧系统音频频谱。
@@ -808,6 +811,7 @@ impl App {
             system: SystemPageState::default(),
             timer: TimerState::default(),
             weather: WeatherState::default(),
+            processes: crate::processes::Snapshot::default(),
             spectrum: crate::audio::Spectrum::default(),
             spectrum_at: -10.0,
             weather_days: false,
@@ -1210,7 +1214,7 @@ impl App {
 
     pub fn show_page(&mut self,page:usize) {
         if !self.settings.visible_pages[page] {
-            self.settings_tab=[1,2,3,5,4,7,11,8,10,10,14][page];
+            self.settings_tab=[1,2,3,5,4,7,11,8,10,10,14,10][page];
             self.open_settings();
             return;
         }
@@ -1249,6 +1253,42 @@ impl App {
             weather_enabled: self.settings.weather_enabled,
             pins: 0,
         }
+    }
+
+    pub fn processes_event(&mut self, snapshot: crate::processes::Snapshot) {
+        self.processes = snapshot;
+    }
+
+    /// 进程页是否正在前台显示（外壳据此启停采样线程）。
+    pub fn process_page_active(&self) -> bool {
+        self.open && self.page == 11
+    }
+
+    #[cfg(feature = "record")]
+    pub fn processes_demo(&mut self) {
+        self.processes = crate::processes::Snapshot {
+            items: [
+                ("msedge.exe", 8.2, 1_240_000_000u64),
+                ("daozai.exe", 5.4, 188_000_000),
+                ("Code.exe", 3.9, 720_000_000),
+                ("explorer.exe", 1.8, 240_000_000),
+                ("WeChat.exe", 1.2, 410_000_000),
+                ("Spotify.exe", 0.9, 260_000_000),
+                ("System", 0.6, 20_000_000),
+                ("svchost.exe", 0.3, 64_000_000),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, cpu, memory))| crate::processes::Process {
+                name: name.into(),
+                pid: 1000 + index as u32,
+                cpu,
+                memory,
+            })
+            .collect(),
+            total: 218,
+            cores: 12,
+        };
     }
 
     /// 通知历史快照（按时段渲染用）与未读数。
@@ -1914,7 +1954,9 @@ impl App {
             || self.open && self.page==8 && self.system.has_data()
             || self.timer.running
             // 天气页图标有缓慢的太阳转动/云层漂移。
-            || self.open && self.page==10 && self.weather.current.is_some();
+            || self.open && self.page==10 && self.weather.current.is_some()
+            // 进程页需要跟随后台采样刷新。
+            || self.open && self.page==11;
         let animating=transitioning || ambient || pet_visible && self.pet.state!=PetState::Sleeping;
         // 交互形变保持 60 帧，媒体 30 帧；小表情 20 帧，睡眠 10 帧，静态界面每秒核对提醒。
         let repaint_after=std::time::Duration::from_secs_f64(if transitioning{1.0/60.0}else if ambient{1.0/30.0}else if pet_visible{if self.pet.state==PetState::Sleeping{0.1}else{0.05}}else{1.0});
@@ -2160,7 +2202,7 @@ impl App {
         let (hover,press)=c.hover_t(&settings);
         c.circle(394.0,18.0,13.0,Color32::from_white_alpha((hover*24.0) as u8));
         paint::gear(&c.scaled(394.0,18.0,0.8*(1.0-press*0.08)),394.0,18.0,paint::mix(theme::GRAY,theme::WHITE,hover));
-        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10,10,14][self.page];self.open_settings();}
+        if settings.clicked(){self.settings_tab=[1,2,3,5,4,7,11,8,10,10,14,10][self.page];self.open_settings();}
         if self.subpage==Some(self.page) {
             c.text(15.0,25.0,"‹",19.0,W::Bold,theme::WHITE,H::Left);
             c.text(37.0,25.0,if self.page==2{"饮水设置"}else{"专注设置"},size::TITLE,W::Bold,theme::WHITE,H::Left);
@@ -2204,6 +2246,7 @@ impl App {
             8 => ("系统", "状态", theme::CYAN),
             9 => ("计时", "工具", theme::GREEN),
             10 => ("天气", "预报", theme::CYAN),
+            11 => ("进程", "排行", theme::GREEN),
             _ => ("岛仔", "设置", theme::WHITE),
         };
         let wa = c.text(15.0, base, a, size::TITLE, W::Bold, theme::WHITE, H::Left);
@@ -2263,6 +2306,7 @@ impl App {
             8 => self.page_system(c, env),
             9 => self.page_timer(c),
             10 => self.page_weather(c),
+            11 => self.page_processes(c),
             CALENDAR_PAGE => self.page_calendar(c,env),
             _ => self.page_settings(c),
         }

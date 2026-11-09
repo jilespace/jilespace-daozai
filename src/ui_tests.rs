@@ -19,7 +19,7 @@ fn corrupt_settings_values_fall_back_without_panicking() {
     assert_eq!(settings.island_opacity,100);
     assert_eq!(settings.island_radius,100);
     assert_eq!(settings.motion,crate::model::MotionPreference::System);
-    assert_eq!(settings.page_order,[0,1,2,3,4,5,6,7,8,9,10]);
+    assert_eq!(settings.page_order,[0,1,2,3,4,5,6,7,8,9,10,11]);
     assert!(settings.visible_pages.iter().any(|enabled|*enabled));
     // 重新渲染不应受损坏配置影响。
     h.app.settings=settings;
@@ -172,6 +172,32 @@ fn system_notifications_are_stored_and_mirrored_to_the_island() {
     h.app.receive_notification("Outlook".into(),"mail-1".into(),"周会提醒".into());
     h.app.notifications_clear();
     assert!(h.app.notifications_snapshot().is_empty());
+}
+
+#[test]
+fn process_page_renders_top_processes_and_opens_task_manager() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.processes_event(crate::processes::Snapshot {
+        items: vec![
+            crate::processes::Process { name: "msedge.exe".into(), pid: 101, cpu: 8.2, memory: 1_240_000_000 },
+            crate::processes::Process { name: "daozai.exe".into(), pid: 102, cpu: 5.4, memory: 188_000_000 },
+            crate::processes::Process { name: "Code.exe".into(), pid: 103, cpu: 3.9, memory: 720_000_000 },
+        ],
+        total: 218,
+        cores: 12,
+    });
+    h.app.show_page(11);
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
+    for _ in 0..40 {h.frame(vec![]);}
+    let contains=|h:&H,text:&str|h.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.text().contains(text)));
+    for expected in ["按 CPU 排序","共 218 个","msedge.exe","8.2%","1.2 GB","daozai.exe"] {
+        assert!(contains(&h,expected),"进程页缺少 {expected}");
+    }
+    h.cmds.clear();
+    h.t+=0.4;
+    h.click(H::local(200.0,80.0));
+    assert!(h.cmds.iter().any(|cmd|matches!(cmd,crate::app::Cmd::Open(path) if path.to_string_lossy().contains("taskmgr"))),"点击进程页应打开任务管理器");
 }
 
 #[test]
@@ -1504,10 +1530,11 @@ fn arrows_and_dots_switch_pages() {
 fn wheel_navigation_reaches_every_page_in_both_directions(){
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
     h.app.settings.visible_pages[10]=true;
+    h.app.settings.visible_pages[11]=true;
     h.app.shelf.items.clear();h.app.todos.items.clear();
     h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
     h.hover(H::local(210.0,18.0),0.3);
-    for (delta,pages) in [(-40.0,[1,2,3,4,5,6,7,8,9,10,0]),(40.0,[10,9,8,7,6,5,4,3,2,1,0])] {
+    for (delta,pages) in [(-40.0,[1,2,3,4,5,6,7,8,9,10,11,0]),(40.0,[11,10,9,8,7,6,5,4,3,2,1,0])] {
         for page in pages {
             h.wheel(delta);
             assert_eq!(h.app.page,page,"滚轮翻页不能被空的置物架或待办卡住");
@@ -1548,7 +1575,7 @@ fn wheel_handles_small_deltas_without_skipping_pages_on_bursts(){
 fn navigation_wraps_between_all_pages_and_notification_settings_remain_accessible() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());let mut h=H::new();
     h.app.settings.visible_pages[10]=true;
-    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);h.click(H::local(21.0,68.0));assert_eq!(h.app.page,10);
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);h.click(H::local(21.0,68.0));assert_eq!(h.app.page,11);
     h.hover(H::local(300.0,60.0),0.8);h.click(H::local(398.0,68.0));assert_eq!(h.app.page,0);
     h.app.open_settings_category(3);assert!(h.app.settings_open);assert_eq!(h.app.settings_tab,6);
 }
@@ -1698,7 +1725,7 @@ fn quota_accounts_switch_independently_and_hide_with_the_page() {
 fn page_visibility_is_saved_and_sets_the_starting_page() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
-    assert_eq!(h.app.settings.visible_pages,[true,true,true,true,true,true,true,true,true,true,false]);
+    assert_eq!(h.app.settings.visible_pages,[true,true,true,true,true,true,true,true,true,true,false,true]);
     assert!(h.app.settings.show_battery);
     h.app.settings.show_battery=false;
     h.app.set_page_visible(0,false);
@@ -1706,17 +1733,17 @@ fn page_visibility_is_saved_and_sets_the_starting_page() {
     h.app.settings.save();
     let settings=crate::model::Settings::load();
     assert!(!settings.show_battery);
-    assert_eq!(settings.visible_pages,[false,true,true,false,true,true,true,true,true,true,false]);
+    assert_eq!(settings.visible_pages,[false,true,true,false,true,true,true,true,true,true,false,true]);
     let restarted=App::new(&h.ctx,Options{fetch_lyrics:false,pet_idle:1e9});
     assert_eq!(restarted.page(),1);
     assert_eq!(restarted.settings.visible_pages,settings.visible_pages);
     assert!(!restarted.settings.show_battery);
     std::fs::write(crate::model::config_dir().join("settings.txt"),"visible_pages=000000\n").unwrap();
-    assert_eq!(crate::model::Settings::load().visible_pages,[true,false,false,false,false,false,false,false,false,false,false]);
+    assert_eq!(crate::model::Settings::load().visible_pages,[true,false,false,false,false,false,false,false,false,false,false,false]);
     std::fs::write(crate::model::config_dir().join("settings.txt"),"visible_pages=1000000\n").unwrap();
-    assert_eq!(crate::model::Settings::load().visible_pages,[true,false,false,false,false,false,false,true,true,true,false],"旧版页面开关应保留并开启新增页面；天气页需要用户主动开启");
+    assert_eq!(crate::model::Settings::load().visible_pages,[true,false,false,false,false,false,false,true,true,true,false,true],"旧版页面开关应保留并开启新增页面；天气页需要用户主动开启");
     std::fs::write(crate::model::config_dir().join("settings.txt"),"visible_pages=invalid\n").unwrap();
-    assert_eq!(crate::model::Settings::load().visible_pages,[true,true,true,true,true,true,true,true,true,true,false]);
+    assert_eq!(crate::model::Settings::load().visible_pages,[true,true,true,true,true,true,true,true,true,true,false,true]);
 }
 
 #[test]
@@ -1756,7 +1783,7 @@ fn battery_module_can_disable_only_the_power_warning() {
 fn page_visibility_skips_hidden_pages_in_every_navigation_control() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
-    for page in [1,3,4,6,7,8,9,10] {h.app.set_page_visible(page,false);}
+    for page in [1,3,4,6,7,8,9,10,11] {h.app.set_page_visible(page,false);}
     h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
     for expected in [2,5,0] {
         h.click(H::local(398.0,68.0));
@@ -1785,7 +1812,7 @@ fn page_visibility_moves_away_from_hidden_page_and_keeps_one_page() {
     h.app.set_page_visible(4,false);
     assert_eq!(h.app.page,0);
     assert!(!h.app.is_editing());
-    for page in [0,1,3,5,6,7,8,9,10] {h.app.set_page_visible(page,false);}
+    for page in [0,1,3,5,6,7,8,9,10,11] {h.app.set_page_visible(page,false);}
     assert_eq!(h.app.page,2);
     h.app.set_page_visible(2,false);
     assert!(h.app.settings.visible_pages[2],"不能关闭最后一个页面");
@@ -3626,13 +3653,13 @@ fn calendar_sync_result_does_not_enqueue_another_sync() {
 fn page_order_persists_and_controls_navigation() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
-    h.app.settings.page_order=[5,2,0,1,3,4,6,7,8,9,10];
+    h.app.settings.page_order=[5,2,0,1,3,4,6,7,8,9,10,11];
     h.app.settings.save();
     let settings=crate::model::Settings::load();
-    assert_eq!(settings.page_order,[5,2,0,1,3,4,6,7,8,9,10]);
+    assert_eq!(settings.page_order,[5,2,0,1,3,4,6,7,8,9,10,11]);
     let restarted=App::new(&h.ctx,Options{fetch_lyrics:false,pet_idle:1e9});
     assert_eq!(restarted.page(),5);
-    for page in [1,3,4,6,7,8,9,10] {h.app.set_page_visible(page,false);}
+    for page in [1,3,4,6,7,8,9,10,11] {h.app.set_page_visible(page,false);}
     h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
     for expected in [5,2,0] {
         h.click(H::local(398.0,68.0));
@@ -3644,14 +3671,16 @@ fn page_order_persists_and_controls_navigation() {
     h.app.set_page_visible(2,false);
     assert_eq!(h.app.page,5);
     std::fs::write(crate::model::config_dir().join("settings.txt"),"page_order=0,1,2,3,4,5,6,7\n").unwrap();
-    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10],"旧版 8 页顺序应保留并把系统、计时与天气页接在最后");
+    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10,11],"旧版 8 页顺序应保留并把新页面接在最后");
     std::fs::write(crate::model::config_dir().join("settings.txt"),"page_order=0,1,2,3,4,5,6,7,8\n").unwrap();
-    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10],"9/10 页顺序应保留并把新页面接在最后");
+    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10,11],"9 页顺序应保留并把新页面接在最后");
     std::fs::write(crate::model::config_dir().join("settings.txt"),"page_order=0,1,2,3,4,5,6,7,8,9\n").unwrap();
-    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10],"10 页顺序应保留并把天气页接在最后");
-    for invalid in ["0,0,1,2,3,4,5,6,7,8,9","11,1,2,3,4,5,6,7,8,9,10","0,1","invalid"] {
+    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10,11],"10 页顺序应保留并把天气、进程页接在最后");
+    std::fs::write(crate::model::config_dir().join("settings.txt"),"page_order=0,1,2,3,4,5,6,7,8,9\n").unwrap();
+    assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10,11],"10 页顺序应保留并把天气、进程页接在最后");
+    for invalid in ["0,0,1,2,3,4,5,6,7,8,9,10","12,1,2,3,4,5,6,7,8,9,10,11","0,1","invalid"] {
         std::fs::write(crate::model::config_dir().join("settings.txt"),format!("page_order={invalid}\n")).unwrap();
-        assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10]);
+        assert_eq!(crate::model::Settings::load().page_order,[0,1,2,3,4,5,6,7,8,9,10,11]);
     }
 }
 
@@ -3678,9 +3707,9 @@ fn page_order_drag_applies_on_release_and_saves() {
     draw(&mut h,vec![egui::Event::PointerMoved(from),button(from,true)]);
     draw(&mut h,vec![egui::Event::PointerMoved(from+egui::vec2(0.0,10.0))]);
     draw(&mut h,vec![egui::Event::PointerMoved(to)]);
-    assert_eq!(h.app.settings.page_order,[0,1,2,3,4,5,6,7,8,9,10]);
+    assert_eq!(h.app.settings.page_order,[0,1,2,3,4,5,6,7,8,9,10,11]);
     draw(&mut h,vec![button(to,false)]);
-    assert_eq!(h.app.settings.page_order,[1,2,0,3,4,5,6,7,8,9,10]);
+    assert_eq!(h.app.settings.page_order,[1,2,0,3,4,5,6,7,8,9,10,11]);
     assert_eq!(crate::model::Settings::load().page_order,h.app.settings.page_order);
 }
 

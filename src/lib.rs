@@ -6,6 +6,7 @@
 //! - `native` / `tray`：仅 Windows 的窗口区域、命中穿透与托盘
 
 pub mod poll_clock;
+pub mod processes;
 pub mod region_capture;
 pub mod screenshot;
 pub mod anim;

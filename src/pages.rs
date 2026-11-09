@@ -1154,6 +1154,88 @@ impl App {
             }
         }
     }
+    // ================= 进程排行 =================
+    pub(crate) fn page_processes(&mut self, c: &Card) {
+        let snapshot = &self.processes;
+        c.text(44.0, 42.0, "按 CPU 排序", 9.5, W::Semibold, theme::WHITE, H::Left);
+        c.text(
+            375.0,
+            42.0,
+            &format!("共 {} 个 · {} 核", snapshot.total.max(0), snapshot.cores.max(1)),
+            8.5,
+            W::Regular,
+            Color32::from_gray(135),
+            H::Right,
+        );
+        let open_task_manager = |app: &mut App| {
+            app.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
+        };
+        if snapshot.items.is_empty() {
+            c.text(209.0, 72.0, "正在采集进程数据…", 11.0, W::Regular, theme::GRAY, H::Center);
+            for index in 0..3 {
+                c.fill(44.0, 54.0 + index as f32 * 13.0, 190.0, 6.0, 3.0, Color32::from_white_alpha(12));
+            }
+            if c.hit(44.0, 32.0, 331.0, 92.0, "processes-open").on_hover_text("点击打开任务管理器").clicked() {
+                open_task_manager(self);
+            }
+            return;
+        }
+        let max_cpu = snapshot.items.first().map(|process| process.cpu).unwrap_or(1.0).max(1.0);
+        for (index, process) in snapshot.items.iter().take(8).enumerate() {
+            let top = 50.0 + index as f32 * 9.2;
+            let baseline = top + 7.0;
+            c.text(46.0, baseline, &format!("{}", index + 1), 7.4, W::Regular, Color32::from_gray(115), H::Left);
+            c.text(
+                58.0,
+                baseline,
+                &c.fit(&process.name, 8.4, W::Regular, 132.0),
+                8.4,
+                W::Regular,
+                if index == 0 { theme::WHITE } else { Color32::from_gray(205) },
+                H::Left,
+            );
+            let bar_x = 198.0;
+            let bar_w = 54.0;
+            // 条长相对榜首缩放，弱负载时也能看出相对高低。
+            let fraction = (process.cpu / max_cpu).clamp(0.0, 1.0);
+            c.fill(bar_x, baseline - 4.0, bar_w, 4.0, 2.0, Color32::from_gray(30));
+            if fraction > 0.005 {
+                c.fill(
+                    bar_x,
+                    baseline - 4.0,
+                    (bar_w * fraction).max(2.0),
+                    4.0,
+                    2.0,
+                    cpu_bar_color(process.cpu),
+                );
+            }
+            c.text(
+                bar_x + bar_w + 6.0,
+                baseline,
+                &crate::processes::format_cpu(process.cpu),
+                8.0,
+                W::Regular,
+                Color32::from_gray(190),
+                H::Left,
+            );
+            c.text(
+                375.0,
+                baseline,
+                &crate::processes::format_memory(process.memory),
+                8.0,
+                W::Regular,
+                Color32::from_gray(145),
+                H::Right,
+            );
+            if index + 1 < snapshot.items.len().min(8) {
+                c.seg((44.0, top + 8.4), (375.0, top + 8.4), 0.5, Color32::from_gray(30));
+            }
+        }
+        if c.hit(44.0, 32.0, 331.0, 92.0, "processes-open").on_hover_text("点击打开任务管理器").clicked() {
+            open_task_manager(self);
+        }
+    }
+
     // ================= 计时（倒计时 / 秒表） =================
     pub(crate) fn page_timer(&mut self, c: &Card) {
         let running = self.timer.running;
@@ -1409,6 +1491,18 @@ fn weather_glyph(c: &Card, cx: f32, cy: f32, size: f32, kind: crate::weather::Ki
         }
     }
 }
+fn cpu_bar_color(cpu: f32) -> Color32 {
+    if cpu >= 50.0 {
+        Color32::from_rgb(235, 96, 86)
+    } else if cpu >= 15.0 {
+        Color32::from_rgb(235, 176, 70)
+    } else if cpu >= 3.0 {
+        Color32::from_rgb(120, 190, 120)
+    } else {
+        Color32::from_rgb(90, 140, 190)
+    }
+}
+
 /// 迷你曲线：面积淡填充 + 折线 + 末端光点；`phase` 让曲线随时间轻微左移。
 fn sparkline(
     c: &Card,

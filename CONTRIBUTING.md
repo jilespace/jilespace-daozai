@@ -32,6 +32,7 @@ cargo run --locked --bin daozai
 | `src/clipboard.rs`、`src/clipboard_ui.rs` | 剪贴板历史服务与快捷面板 |
 | `src/command_palette.rs`、`src/panel.rs` | 命令面板、应用检索、计算/换算与浮层视觉令牌 |
 | `src/perf.rs` | CPU／内存／网络／磁盘采样与格式化 |
+| `src/processes.rs` | 进程枚举、CPU/内存采样与排行 |
 | `src/world_clock.rs` | 命令面板世界时钟与时区格式化 |
 | `src/weather.rs` | Open-Meteo 天气解析、缓存与后台刷新服务 |
 | `src/audio.rs` | WASAPI 回环抓音、FFT 与频段映射 |
