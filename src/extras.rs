@@ -807,7 +807,7 @@ impl App {
             setting_row(
                 ui,
                 "清理链接跟踪参数",
-                "复制单条链接时去掉 utm_*、fbclid、spm 等营销参数",
+                "复制文本里的链接时去掉 utm_*、fbclid、spm 等营销参数，保留正文",
                 &mut self.settings.clipboard_clean_links,
             );
             ui.separator();

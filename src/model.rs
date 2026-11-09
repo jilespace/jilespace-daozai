@@ -161,7 +161,7 @@ pub struct Settings {
     pub clipboard_paused: bool,
     pub clipboard_limit: u32,
     pub clipboard_days: u32,
-    /// 复制链接时自动清理跟踪参数。
+    /// 复制文本时自动清理其中链接的跟踪参数。
     pub clipboard_clean_links: bool,
     /// 免打扰时段：只记录通知，不弹横幅与铃铛。
     pub dnd_enabled: bool,

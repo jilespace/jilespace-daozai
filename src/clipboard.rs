@@ -182,20 +182,93 @@ impl History {
     }
 }
 
-/// 去掉常见营销/分享跟踪参数；只处理「整段就是一条链接」的文本，其它内容原样返回。
+/// 去掉常见营销/分享跟踪参数；支持整段是链接，也支持正文里夹带的多个链接。
 pub fn clean_tracking(text: &str) -> String {
-    let trimmed = text.trim();
-    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-        || trimmed.chars().any(char::is_whitespace)
-    {
+    let urls = find_urls(text);
+    if urls.is_empty() {
         return text.to_string();
     }
-    let (before_fragment, fragment) = match trimmed.split_once('#') {
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (start, end) in urls {
+        output.push_str(&text[cursor..start]);
+        output.push_str(&clean_url(&text[start..end]));
+        cursor = end;
+    }
+    output.push_str(&text[cursor..]);
+    output
+}
+
+fn find_urls(text: &str) -> Vec<(usize, usize)> {
+    let mut urls = Vec::new();
+    let mut search = 0usize;
+    while search < text.len() {
+        let rest = &text[search..];
+        let next = ["https://", "http://"]
+            .iter()
+            .filter_map(|prefix| rest.find(prefix).map(|offset| (offset, prefix.len())))
+            .min_by_key(|(offset, _)| *offset);
+        let Some((offset, prefix_len)) = next else { break };
+        let start = search + offset;
+        let boundary_ok = start == 0
+            || text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_whitespace() || "([{（【《「『\"'：:".contains(ch));
+        if !boundary_ok {
+            search = start + prefix_len;
+            continue;
+        }
+        let mut end = start;
+        for (index, ch) in text[start..].char_indices() {
+            if ch.is_whitespace() || "<>\"'`\u{3000}".contains(ch) {
+                break;
+            }
+            end = start + index + ch.len_utf8();
+        }
+        if end <= start {
+            search = start + prefix_len;
+            continue;
+        }
+        let trimmed = trim_trailing_url_punctuation(&text[start..end]);
+        let url_end = start + trimmed.len();
+        if url_end <= start + prefix_len {
+            search = start + prefix_len;
+            continue;
+        }
+        urls.push((start, url_end));
+        search = url_end;
+    }
+    urls
+}
+
+fn trim_trailing_url_punctuation(url: &str) -> &str {
+    let mut end = url.len();
+    loop {
+        let Some(last) = url[..end].chars().next_back() else { break };
+        let strip = match last {
+            ')' => url[..end].matches('(').count() < url[..end].matches(')').count(),
+            ']' => url[..end].matches('[').count() < url[..end].matches(']').count(),
+            '}' => url[..end].matches('{').count() < url[..end].matches('}').count(),
+            ',' | '.' | ';' | ':' | '!' | '?' | '，' | '。' | '；' | '：' | '！' | '？' | '、'
+            | '"' | '\'' | '`' => true,
+            _ => false,
+        };
+        if !strip {
+            break;
+        }
+        end -= last.len_utf8();
+    }
+    &url[..end]
+}
+
+fn clean_url(url: &str) -> String {
+    let (before_fragment, fragment) = match url.split_once('#') {
         Some((before, fragment)) => (before, Some(fragment)),
-        None => (trimmed, None),
+        None => (url, None),
     };
     let Some((base, query)) = before_fragment.split_once('?') else {
-        return text.to_string();
+        return url.to_string();
     };
     let pairs: Vec<&str> = query.split('&').filter(|pair| !pair.is_empty()).collect();
     let kept: Vec<&str> = pairs
@@ -204,7 +277,7 @@ pub fn clean_tracking(text: &str) -> String {
         .filter(|pair| !is_tracking_param(pair.split('=').next().unwrap_or("")))
         .collect();
     if kept.len() == pairs.len() {
-        return text.to_string();
+        return url.to_string();
     }
     let mut out = base.to_string();
     if !kept.is_empty() {
@@ -839,11 +912,31 @@ mod tests {
         );
         // 全部都是跟踪参数时连问号一起去掉。
         assert_eq!(clean_tracking("https://example.com?utm_medium=mail&spm=a1"), "https://example.com");
-        // 不是链接、或链接里带空格时保持原样。
-        let plain = "https://example.com/a?utm_source=x 这里有空格";
-        assert_eq!(clean_tracking(plain), plain);
+        // 正文里夹带的链接同样清理，但保留上下文与标点。
+        let embedded = "https://example.com/a?utm_source=x 这里有空格";
+        assert_eq!(clean_tracking(embedded), "https://example.com/a 这里有空格");
         assert_eq!(clean_tracking("普通文本 utm_source=x"), "普通文本 utm_source=x");
         assert_eq!(clean_tracking("https://example.com/a?id=1"), "https://example.com/a?id=1");
+    }
+
+    #[test]
+    fn clean_tracking_handles_links_inside_sentences() {
+        assert_eq!(
+            clean_tracking("看这个 https://example.com/a?utm_source=x&id=42，以及 (https://b.com/x?fbclid=1)。"),
+            "看这个 https://example.com/a?id=42，以及 (https://b.com/x)。"
+        );
+        assert_eq!(
+            clean_tracking("链接：https://example.com/a?utm_source=x。"),
+            "链接：https://example.com/a。"
+        );
+        assert_eq!(
+            clean_tracking("两条：https://a.com?utm_source=x 和 https://b.com?spm=y"),
+            "两条：https://a.com 和 https://b.com"
+        );
+        assert_eq!(
+            clean_tracking("正常句子，没有链接。"),
+            "正常句子，没有链接。"
+        );
     }
 
     #[test]
