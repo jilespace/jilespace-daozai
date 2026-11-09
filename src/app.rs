@@ -1247,6 +1247,7 @@ impl App {
             },
             stay_awake: self.settings.stay_awake,
             weather_enabled: self.settings.weather_enabled,
+            pins: 0,
         }
     }
 

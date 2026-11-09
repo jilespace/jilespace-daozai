@@ -52,6 +52,7 @@ pub enum Action {
     OpenNotifications,
     ScreenshotRegion,
     CopyClipboard(String),
+    ClosePins,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -65,6 +66,8 @@ pub struct Snapshot {
     pub timer_remaining: f64,
     pub stay_awake: bool,
     pub weather_enabled: bool,
+    /// 当前桌面贴图数量，用于「关闭所有贴图」。
+    pub pins: usize,
 }
 
 #[derive(Clone)]
@@ -402,6 +405,16 @@ impl Panel {
                 "天气 weather forecast refresh 刷新",
                 Glyph::Gear,
                 Action::RefreshWeather,
+            ));
+        }
+        if snapshot.pins > 0 {
+            entries.push(action(
+                "action-close-pins",
+                "关闭所有贴图",
+                &format!("当前桌面上有 {} 张贴图", snapshot.pins),
+                "贴图 关闭 pin close",
+                Glyph::Gear,
+                Action::ClosePins,
             ));
         }
         entries.push(action(
@@ -1777,6 +1790,7 @@ mod tests {
             timer_remaining: 0.0,
             stay_awake: false,
             weather_enabled: false,
+            pins: 0,
         }
     }
 
@@ -1793,6 +1807,17 @@ mod tests {
                 path: PathBuf::from(r"C:\fixture\WeChat.lnk"),
             },
         ]
+    }
+
+    fn palette_for_snapshot(snapshot: Snapshot, query: &str) -> Panel {
+        let mut palette = Panel::default();
+        palette.apps = fixture_apps();
+        palette.apps_at = Some(Instant::now());
+        palette.open(&snapshot);
+        palette.query = query.into();
+        palette.fade = 1.0;
+        palette.rebuild();
+        palette
     }
 
     fn palette_for_test(query: &str) -> Panel {
@@ -1928,6 +1953,17 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn close_all_pins_appears_only_when_pins_exist() {
+        let mut snapshot = snapshot();
+        assert!(snapshot.pins == 0);
+        let palette = palette_for_snapshot(snapshot.clone(), "贴图");
+        assert!(palette.results.iter().all(|entry| entry.action != Action::ClosePins));
+        snapshot.pins = 2;
+        let palette = palette_for_snapshot(snapshot, "贴图");
+        assert!(palette.results.iter().any(|entry| entry.action == Action::ClosePins));
+    }
+
     #[test]
     fn clipboard_entries_are_searchable_but_hidden_from_empty_query() {
         let mut palette = Panel::default();

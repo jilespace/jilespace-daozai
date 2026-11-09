@@ -689,7 +689,8 @@ impl Shell {
         if self.clipboard_popup.open {
             self.close_clipboard(false);
         }
-        let snapshot = self.app.palette_snapshot();
+        let mut snapshot = self.app.palette_snapshot();
+        snapshot.pins = self.pins.len();
         self.command_palette.open(&snapshot);
         let entries = self.palette_clipboard_entries();
         self.command_palette.set_clipboard(entries);
@@ -802,6 +803,12 @@ impl Shell {
             PaletteAction::CopyClipboard(id) => {
                 self.close_command_palette();
                 self.clipboard.copy(&id);
+            }
+            PaletteAction::ClosePins => {
+                self.close_command_palette();
+                let count = self.pins.len();
+                self.pins.clear();
+                self.app.say(format!("已关闭 {count} 张贴图"));
             }
             PaletteAction::SetStayAwake(awake) => {
                 self.close_command_palette();

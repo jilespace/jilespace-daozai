@@ -201,6 +201,38 @@ pub fn app_icon()->std::sync::Arc<eframe::egui::IconData>{
 
 #[cfg(test)]
 mod tests {
+    /// 开发用：统计三种字重在典型字号下占用的字体图集像素数。
+    #[test]
+    #[ignore]
+    fn font_atlas_probe() {
+        use super::*;
+        let ctx = eframe::egui::Context::default();
+        load_fonts(&ctx);
+        let samples = "岛仔截图天气空气质量通知历史剪贴板命令面板abcABC0123456789/·—…";
+        let mut total = 0usize;
+        for frame in 0..4 {
+            let raw = eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, eframe::egui::vec2(900.0, 700.0))),
+                time: Some(frame as f64 / 60.0),
+                ..Default::default()
+            };
+            let output = ctx.run(raw, |ctx| {
+                eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                    for weight in [W::Regular, W::Semibold, W::Bold] {
+                        for size in [8.5, 9.0, 10.0, 10.5, 11.0, 11.5, 12.0, 13.0, 14.0, 16.0, 19.0, 23.0, 31.0] {
+                            ui.label(eframe::egui::RichText::new(samples).font(font(size, weight)));
+                        }
+                    }
+                });
+            });
+            for (_, delta) in output.textures_delta.set {
+                let [width, height] = delta.image.size();
+                total = total.max(width * height);
+            }
+        }
+        eprintln!("FONT_ATLAS_PIXELS={total}");
+    }
+
     #[cfg(windows)]
     #[test]
     fn mapped_fonts_prevent_in_place_writes_and_keep_shared_reads(){

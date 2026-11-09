@@ -455,6 +455,7 @@ impl App {
         let items = self.shelf.items.clone();
         self.icons.retain(&items);
         self.shelf_x.retain(|p, _| items.contains(p));
+        self.shelf_born.retain(|p, _| items.contains(p));
         for (i, p) in items.iter().enumerate() {
             let target = center + (i as f32 - scroll - (visible - 1.0) / 2.0) * slot;
             let born = self.shelf_born.get(p).copied();

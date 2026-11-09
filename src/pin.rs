@@ -26,17 +26,25 @@ static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 pub struct Pin {
     image: Image,
     texture: Option<egui::TextureHandle>,
-    size: Vec2,
+    base_size: Vec2,
+    zoom: f32,
+    opacity: f32,
     position: Option<Pos2>,
     viewport: egui::ViewportId,
     shown: bool,
 }
 
+pub const MIN_ZOOM: f32 = 0.4;
+pub const MAX_ZOOM: f32 = 3.0;
+pub const MIN_OPACITY: f32 = 0.25;
+
 impl Pin {
     pub fn new(image: Image, pixels_per_point: f32) -> Self {
         let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
-            size: window_size(&image, pixels_per_point),
+            base_size: window_size(&image, pixels_per_point),
+            zoom: 1.0,
+            opacity: 1.0,
             image,
             texture: None,
             position: None,
@@ -45,13 +53,34 @@ impl Pin {
         }
     }
 
+    pub fn display_size(&self) -> Vec2 {
+        self.base_size * self.zoom
+    }
+
+    pub fn set_zoom(&mut self, zoom: f32) {
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(MIN_OPACITY, 1.0);
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
     /// 返回 `true` 表示用户关闭了这张贴图。
     pub fn show(&mut self, ctx: &egui::Context, dark: bool) -> bool {
         let ppp = ctx.pixels_per_point();
+        let size = self.display_size();
         let position = *self.position.get_or_insert_with(|| {
             #[cfg(windows)]
             {
-                crate::native::clipboard_popup_position(self.size.x, self.size.y, ppp)
+                crate::native::clipboard_popup_position(size.x, size.y, ppp)
                     .map(|(x, y)| egui::pos2(x, y))
                     .unwrap_or_else(|| egui::pos2(120.0, 80.0))
             }
@@ -65,8 +94,8 @@ impl Pin {
         let builder = egui::ViewportBuilder::default()
             .with_title("贴图 · 岛仔")
             .with_icon(crate::theme::app_icon())
-            .with_inner_size([self.size.x, self.size.y])
-            .with_min_inner_size([self.size.x, self.size.y])
+            .with_inner_size([size.x, size.y])
+            .with_min_inner_size([size.x, size.y])
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -110,20 +139,40 @@ impl Pin {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let response = ui.interact(rect, egui::Id::new("pin-surface"), egui::Sense::click_and_drag());
+                let tint = Color32::from_white_alpha((self.opacity * 255.0).round() as u8);
                 if let Some(texture) = &self.texture {
                     ui.painter().add(
-                        egui::epaint::RectShape::filled(rect, 8.0, Color32::WHITE)
+                        egui::epaint::RectShape::filled(rect, 8.0, tint)
                             .with_texture(texture.id(), Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0))),
                     );
                 }
                 ui.painter().rect_stroke(
                     rect.shrink(0.5),
                     8.0,
-                    Stroke::new(1.0_f32, Color32::from_white_alpha(46)),
+                    Stroke::new(1.0_f32, Color32::from_white_alpha((46.0 * self.opacity) as u8)),
                     egui::StrokeKind::Inside,
                 );
                 if response.hovered() {
+                    let scroll = ui.input(|input| input.raw_scroll_delta.y);
+                    if scroll.abs() > 0.01 {
+                        if ui.input(|input| input.modifiers.ctrl) {
+                            self.set_opacity(self.opacity + scroll * 0.002);
+                        } else {
+                            self.set_zoom(self.zoom * (1.0 + scroll * 0.0015));
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(self.display_size()));
+                        }
+                    }
+                }
+                if response.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                    let hint = format!("{:.0}%  ·  不透明度 {:.0}%", self.zoom * 100.0, self.opacity * 100.0);
+                    let galley = ui.painter().layout_no_wrap(hint, egui::FontId::proportional(9.0), Color32::WHITE);
+                    let hint_rect = Rect::from_min_size(
+                        rect.left_bottom() + Vec2::new(6.0, -galley.size().y - 6.0),
+                        galley.size() + Vec2::new(10.0, 4.0),
+                    );
+                    ui.painter().rect_filled(hint_rect, 5.0, Color32::from_black_alpha(160));
+                    ui.painter().galley(hint_rect.min + Vec2::new(5.0, 2.0), galley, Color32::WHITE);
                     let close = Rect::from_min_size(rect.max - Vec2::splat(22.0), Vec2::splat(16.0));
                     let hit = ui.interact(close, egui::Id::new("pin-close"), egui::Sense::click());
                     ui.painter().circle_filled(close.center(), 8.0, Color32::from_black_alpha(150));
@@ -139,10 +188,9 @@ impl Pin {
                         closed = true;
                     }
                 }
-                if response.clicked() || response.drag_started() {
-                    if ui.input(|input| input.pointer.primary_pressed()) {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
+                // 只在真正拖动时交给系统拖窗口，普通点击（关闭按钮/双击）不被吞掉。
+                if response.drag_started() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
                 if response.double_clicked() || ui.input(|input| input.pointer.secondary_clicked() && response.hovered()) {
                     closed = true;
@@ -194,32 +242,83 @@ mod tests {
     }
 
     #[test]
+    fn zoom_and_opacity_are_clamped() {
+        let mut pin = Pin::new(gradient(200, 100), 2.0);
+        let base = pin.display_size();
+        pin.set_zoom(2.0);
+        assert_eq!(pin.display_size(), base * 2.0);
+        pin.set_zoom(99.0);
+        assert_eq!(pin.zoom(), MAX_ZOOM);
+        pin.set_zoom(0.01);
+        assert_eq!(pin.zoom(), MIN_ZOOM);
+        pin.set_opacity(0.5);
+        assert!((pin.opacity() - 0.5).abs() < 1e-6);
+        pin.set_opacity(0.0);
+        assert!((pin.opacity() - MIN_OPACITY).abs() < 1e-6);
+        pin.set_opacity(5.0);
+        assert!((pin.opacity() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn pin_renders_and_paints_the_image_offscreen() {
         let ctx = egui::Context::default();
         crate::theme::load_fonts(&ctx);
         let mut pin = Pin::new(gradient(240, 160), 2.0);
-        let size = pin.size;
-        let raw = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
-            time: Some(0.0),
-            viewports: std::iter::once((
-                egui::ViewportId::ROOT,
-                egui::ViewportInfo { native_pixels_per_point: Some(2.0), ..Default::default() },
-            ))
-            .collect(),
-            ..Default::default()
-        };
-        let output = ctx.run(raw, |ctx| {
-            let _ = pin.paint(ctx, true);
-        });
+        pin.set_zoom(1.25);
+        pin.set_opacity(0.85);
+        let size = pin.display_size();
+        let mut last = None;
+        let mut textures = Vec::new();
+        for frame in 0..2 {
+            let events = if frame == 1 {
+                vec![egui::Event::PointerMoved(Pos2::new(size.x / 2.0, size.y / 2.0))]
+            } else {
+                Vec::new()
+            };
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(frame as f64 / 60.0),
+                events,
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo { native_pixels_per_point: Some(2.0), ..Default::default() },
+                ))
+                .collect(),
+                ..Default::default()
+            };
+            let output = ctx.run(raw, |ctx| {
+                let _ = pin.paint(ctx, true);
+            });
+            textures.push(output.textures_delta.clone());
+            last = Some(output);
+        }
+        let output = last.expect("至少渲染一帧");
         assert!(!output.shapes.is_empty(), "贴图应绘制图片与描边");
+        fn collect<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text),
+                egui::Shape::Vec(items) => {
+                    for item in items {
+                        collect(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut texts);
+        }
+        assert!(texts.iter().any(|text| text.galley.text().contains("不透明度")), "悬停应显示缩放/透明度提示");
         if let Some(dest) = std::env::var_os("DAOZAI_PIN_PREVIEW_DIR").filter(|value| !value.is_empty()) {
             let dest = std::path::PathBuf::from(dest);
             std::fs::create_dir_all(&dest).unwrap();
             let width = (size.x * 2.0) as usize;
             let height = (size.y * 2.0) as usize;
             let mut raster = crate::preview_raster::Raster::new(width, height);
-            raster.update_textures(&output.textures_delta);
+            for delta in &textures {
+                raster.update_textures(delta);
+            }
             let primitives = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
             raster.draw(&primitives, output.pixels_per_point);
             let mut rgba = Vec::new();
