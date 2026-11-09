@@ -1341,6 +1341,12 @@ impl App {
                         });
                     }
                     1=>{
+                        settings_label(ui,"音频可视化");
+                        settings_card(ui,|ui|{
+                            setting_row(ui,"真实频谱","用系统播放声音绘制收起时的频谱条（实验）",&mut self.settings.audio_visualizer);
+                            ui.add_space(3.0);
+                            ui.label(egui::RichText::new("通过 WASAPI 回环抓取默认输出设备的混音，只在播放时显示；不保存任何音频，关闭后立即停止抓取。").size(11.0).color(settings_color(&ctx,Color32::from_gray(175),Color32::from_gray(95))));
+                        });
                         settings_label(ui,"歌词");
                         settings_card(ui,|ui|{
                             setting_row(ui,"展开时显示歌词","在播放器右侧同步滚动显示歌词",&mut self.settings.lyrics_enabled);

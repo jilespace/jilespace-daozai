@@ -305,6 +305,37 @@ pub fn alpha(c: Color32, a: f32) -> Color32 {
 #[cfg(test)]
 mod gradient_tests {
     use super::*;
+
+    #[test]
+    fn spectrum_draws_one_bar_per_band_inside_the_box() {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(100.0))),
+            ..Default::default()
+        };
+        let bands = [0.0f32, 0.25, 0.5, 0.75, 1.0, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1, 0.05];
+        let output = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().frame(egui::Frame::new()).show(ctx, |ui| {
+                let c = Card::new(ui, Pos2::ZERO, ui.max_rect());
+                spectrum(&c, 50.0, 50.0, 24.0, 20.0, &bands, Color32::WHITE);
+            });
+        });
+        let bars: Vec<Rect> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == Color32::WHITE => Some(rect.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), bands.len(), "每个频段应画一根竖条");
+        assert!(bars.iter().all(|bar| bar.width() >= 0.9 && bar.width() <= 3.0));
+        assert!(bars.iter().all(|bar| bar.height() >= 1.0 && bar.height() <= 20.0));
+        assert!(bars.iter().all(|bar| bar.top() >= 40.0 && bar.bottom() <= 60.0));
+        // 能量越高竖条越高：0 频段最矮，满能量频段最高。
+        assert!(bars[0].height() < bars[4].height());
+    }
+
     #[test]
     fn long_email_links_do_not_create_hundreds_of_layouts() {
         let ctx=egui::Context::default();
@@ -501,6 +532,20 @@ pub fn playback_bars(c:&Card,cx:f32,cy:f32,time:f64,playing:bool,color:Color32) 
         let phase=if playing {time as f32*(5.0+i as f32*0.7)}else{0.0}+i as f32*1.6;
         let height=if playing {3.5+(phase.sin()*0.5+0.5)*8.0}else{3.5};
         c.fill(cx-7.8+i as f32*3.9,cy-height/2.0,1.9,height,0.95,color);
+    }
+}
+
+/// 真实音频频谱：底对齐的细条，高度按 0..1 能量映射。
+pub fn spectrum(c:&Card,cx:f32,cy:f32,width:f32,height:f32,bands:&[f32],color:Color32){
+    let count=bands.len();
+    if count==0 {return;}
+    let step=width/count as f32;
+    let bar=(step*0.62).max(0.9);
+    for (index,value) in bands.iter().enumerate(){
+        let value=value.clamp(0.0,1.0);
+        let h=(height*(0.10+0.90*value)).clamp(1.0,height);
+        let x=cx-width/2.0+step*index as f32+(step-bar)/2.0;
+        c.fill(x,cy-h/2.0,bar,h,bar/2.0,color);
     }
 }
 

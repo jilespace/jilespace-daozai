@@ -703,6 +703,9 @@ pub struct App {
     pub(crate) weather: WeatherState,
     /// 天气页右侧卡片：`true` 显示多日预报，`false` 显示逐小时。
     pub(crate) weather_days: bool,
+    /// 最近一帧系统音频频谱。
+    pub(crate) spectrum: crate::audio::Spectrum,
+    spectrum_at: f64,
     /// 通知历史：Windows 通知镜像，持久化到本机。
     pub(crate) notifications: crate::notifications::Store,
     /// 通知历史版本号；外壳据此判断是否需要刷新面板。
@@ -805,6 +808,8 @@ impl App {
             system: SystemPageState::default(),
             timer: TimerState::default(),
             weather: WeatherState::default(),
+            spectrum: crate::audio::Spectrum::default(),
+            spectrum_at: -10.0,
             weather_days: false,
             notifications: crate::notifications::Store::load(),
             notifications_revision: 0,
@@ -1276,6 +1281,29 @@ impl App {
     /// 请求外壳打开通知历史面板。
     pub fn open_notifications_panel(&mut self) {
         self.pending.push(Cmd::OpenNotifications);
+    }
+
+    /// 后台线程送来的音频频谱；只在设置开启时使用。
+    pub fn audio_spectrum(&mut self, spectrum: crate::audio::Spectrum) {
+        self.spectrum = spectrum;
+        self.spectrum_at = self.t;
+    }
+
+    #[cfg(feature = "record")]
+    pub fn spectrum_demo(&mut self) {
+        self.spectrum = crate::audio::Spectrum {
+            bands: [0.18, 0.42, 0.68, 0.92, 0.74, 0.55, 0.38, 0.62, 0.44, 0.28, 0.20, 0.12],
+            level: 0.46,
+        };
+        self.spectrum_at = self.t;
+    }
+
+    fn draw_playback_bars(&self, c: &Card, x: f32, y: f32) {
+        if self.settings.audio_visualizer && self.media.playing && self.spectrum.level > 0.006 {
+            crate::paint::spectrum(c, x, y, 20.0, 13.0, &self.spectrum.bands, theme::WHITE);
+        } else {
+            crate::paint::playback_bars(c, x, y, self.t, self.media.playing, theme::WHITE);
+        }
     }
 
     /// 天气服务事件：失败时保留上一次成功数据，只记录错误。
@@ -2003,7 +2031,7 @@ impl App {
             let fade=1.0-(index as f32-shown).abs().min(1.0);
             let position=c.pos(left+content_width-LYRIC_BAR_W/2.0,center_y-galley.size().y/2.0+(1.0-fade)*3.0);
             c.painter.galley(position,galley,if lyric.is_some(){theme::WHITE}else{theme::GRAY});
-            paint::playback_bars(&c,left+content_width-21.0,center_y,self.t,self.media.playing,theme::WHITE);
+            self.draw_playback_bars(&c,left+content_width-21.0,center_y);
             if self.pomo.running {
                 let alpha=smoothstep(0.88,1.0,(width-content_width)/self.lyric_focus_space());
                 crate::focus_bar::draw(&c.faded(alpha),left+width-14.0-crate::focus_bar::LYRIC_WIDTH/2.0,center_y,self.t,&self.pomo,self.phase_secs(self.pomo.phase),true);
@@ -2058,7 +2086,7 @@ impl App {
             base.faded(reveal).text(hd + (1.0 - reveal) * 10.0, 22.5, &env.date, size::DATE, W::Regular, Color32::from_rgb(210, 210, 214), H::Left);
         }
         if has_music && (p>0.1 || layout.x[bar::MUSIC].is_some()) {
-            paint::playback_bars(base,lerp(local_cx+layout.x[bar::MUSIC].unwrap_or(0.0),367.0,m),lerp(15.0,18.0,m),self.t,self.media.playing,theme::WHITE);
+            self.draw_playback_bars(base,lerp(local_cx+layout.x[bar::MUSIC].unwrap_or(0.0),367.0,m),lerp(15.0,18.0,m));
         }
         let compact_alpha=1.0-smoothstep(0.0,0.22,p);
         if self.t<self.notification_bell_until&&!self.compact_notices()&&p<0.1 {
@@ -2239,6 +2267,12 @@ impl App {
     // ---------------------------------------------------------------
     fn tick(&mut self, env: &Env, dt: f32, elapsed: f32) {
         self.system.update(env, dt);
+        if self.t - self.spectrum_at > 0.09 {
+            for band in &mut self.spectrum.bands {
+                *band = anim::approach(*band, 0.0, 9.0, dt);
+            }
+            self.spectrum.level = anim::approach(self.spectrum.level, 0.0, 9.0, dt);
+        }
         if self.timer.tick(elapsed as f64) {
             let label = match self.timer.mode {
                 TimerMode::Countdown => "倒计时结束",

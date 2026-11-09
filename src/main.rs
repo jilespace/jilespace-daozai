@@ -50,6 +50,9 @@ struct Shell {
     cal_sig: (Vec<daozai::calendar::Config>, bool),
     weather: daozai::weather::Service,
     weather_sig: (bool, String, u32),
+    /// 音频可视化服务：开启设置时才启动。
+    audio: Option<daozai::audio::Service>,
+    audio_visualizer: bool,
     quota: daozai::quota::Service,
     quota_sig: Option<(bool,Vec<daozai::quota::Account>)>,
     quota_at: PollClock,
@@ -116,6 +119,7 @@ impl Shell {
             daozai::system::set_stay_awake(true);
         }
         let stay_awake = app.settings.stay_awake;
+        let audio_visualizer = app.settings.audio_visualizer;
         let clipboard = daozai::clipboard::Service::start();
         clipboard.set_enabled(clipboard_enabled);
         clipboard.set_limits(clipboard_limit, clipboard_days);
@@ -153,6 +157,8 @@ impl Shell {
             cal_sig: (Vec::new(), true),
             weather: daozai::weather::Service::start(),
             weather_sig: (false, String::new(), 0),
+            audio: if audio_visualizer { Some(daozai::audio::Service::start()) } else { None },
+            audio_visualizer,
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
             clipboard,
             clipboard_popup: daozai::clipboard_ui::Popup::default(),
@@ -870,6 +876,18 @@ impl eframe::App for Shell {
             self.weather_sig=weather_cfg;
         }
         while let Some(event)=self.weather.try_recv(){self.app.weather_event(event);}
+        if self.app.settings.audio_visualizer != self.audio_visualizer {
+            self.audio_visualizer = self.app.settings.audio_visualizer;
+            self.audio = if self.audio_visualizer { Some(daozai::audio::Service::start()) } else { None };
+        }
+        if let Some(service) = self.audio.as_ref() {
+            while let Some(event) = service.try_recv() {
+                match event {
+                    daozai::audio::Event::Spectrum(spectrum) => self.app.audio_spectrum(spectrum),
+                    daozai::audio::Event::Unavailable(message) => self.app.say(format!("音频可视化不可用：{message}")),
+                }
+            }
+        }
         #[cfg(feature="record")] let quota_demo=std::env::var("DAOZAI_QUOTA_DEMO").is_ok();
         #[cfg(not(feature="record"))] let quota_demo=false;
         if !quota_demo {

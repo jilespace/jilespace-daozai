@@ -163,6 +163,8 @@ pub struct Settings {
     pub clipboard_days: u32,
     /// 防睡眠：阻止系统休眠与息屏。
     pub stay_awake: bool,
+    /// 音频可视化：用系统回环绘制真实频谱，默认关闭以避免无谓占用。
+    pub audio_visualizer: bool,
     /// 天气页：需要联网与城市设置，默认关闭。
     pub weather_enabled: bool,
     pub weather_city: String,
@@ -172,7 +174,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false], page_order: [0,1,2,3,4,5,6,7,8,9,10], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, stay_awake: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false], page_order: [0,1,2,3,4,5,6,7,8,9,10], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
     }
 }
 
@@ -239,6 +241,7 @@ impl Settings {
                     s.clipboard_days = v.parse::<u32>().unwrap_or(7).clamp(1, 30)
                 }
                 "stay_awake" => s.stay_awake = v == "1",
+                "audio_visualizer" => s.audio_visualizer = v == "1",
                 "weather_enabled" => { s.weather_enabled = v == "1"; weather_key_seen = true; }
                 "weather_city" => s.weather_city = v.trim().to_string(),
                 "weather_refresh_minutes" => s.weather_refresh_minutes = v.parse::<u32>().unwrap_or(crate::weather::DEFAULT_REFRESH_MINUTES).clamp(5, 180),
@@ -292,6 +295,7 @@ impl Settings {
                 ("clipboard_limit".into(), self.clipboard_limit.to_string()),
                 ("clipboard_days".into(), self.clipboard_days.to_string()),
                 ("stay_awake".into(), (self.stay_awake as u8).to_string()),
+                ("audio_visualizer".into(), (self.audio_visualizer as u8).to_string()),
                 ("weather_enabled".into(), (self.weather_enabled as u8).to_string()),
                 ("weather_city".into(), self.weather_city.clone()),
                 ("weather_refresh_minutes".into(), self.weather_refresh_minutes.to_string()),
