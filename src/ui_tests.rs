@@ -1979,6 +1979,28 @@ fn mail_page_shows_code_and_copies_on_click() {
 }
 
 #[test]
+fn mail_page_shows_retry_when_connection_fails() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = H::new();
+    h.app.mail.accounts = vec![crate::mail::Account {
+        email: "a@qq.com".into(),
+        provider: crate::mail::Provider::Qq,
+        enabled: true,
+    }];
+    h.app.mail.status.insert("a@qq.com".into(), crate::mail::Status::Failed("授权失效".into()));
+    h.app.show_page(5);
+    h.hover(Pos2::new(WIN_W/2.0,12.0),0.6);
+    for _ in 0..40 {h.frame(vec![]);}
+    let contains=|h:&H,text:&str|h.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.text().contains(text)));
+    assert!(contains(&h,"连接失败 · 点击重试"),"失败时应给出重试入口");
+    assert!(contains(&h,"暂无邮件 · 可点击左侧重试"));
+    h.cmds.clear();
+    h.t+=0.4;
+    h.click(H::local(100.0,108.0));
+    assert!(h.cmds.iter().any(|c|matches!(c,crate::app::Cmd::MailSync)),"点击失败提示应触发邮件同步");
+}
+
+#[test]
 fn mail_row_opens_summary_and_back_returns() {
     let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut h = H::new();

@@ -687,6 +687,11 @@ impl App {
             }
         }
         c.fill(36.0,36.0,140.0,86.0,11.0,theme::CARD);
+        let failure=self.mail.accounts.iter().filter(|a|a.enabled).find_map(|a|match self.mail.status_of(&a.email){
+            mail::Status::Failed(message)=>Some(message),
+            _=>None,
+        });
+        let connecting=self.mail.accounts.iter().any(|a|a.enabled && matches!(self.mail.status_of(&a.email),mail::Status::Connecting));
         let code=self.mail.code_item().filter(|_|self.settings.mail_code).cloned();
         if let Some(item)=&code {
             let value=item.code.as_deref().unwrap_or_default();
@@ -713,9 +718,22 @@ impl App {
                 }}
             }else if ready==total{format!("{total} 个邮箱已连接")}else if ready==0{"邮箱未连接".into()}else{"部分邮箱未连接".into()};
             let color=if ready==total&&self.mail.accounts.iter().all(|a|a.enabled){theme::GREEN}else{theme::GRAY};
-            c.text(46.0,108.0,&c.fit(&status,10.5,W::Regular,120.0),10.5,W::Regular,color,H::Left);
+            if let Some(error)=failure.as_deref() {
+                c.text(46.0,108.0,"连接失败 · 点击重试",10.5,W::Semibold,Color32::from_rgb(235,176,70),H::Left);
+                if c.hit(42.0,100.0,138.0,16.0,"mail-retry").on_hover_text(format!("{error}\n点击重新同步所有邮箱")).clicked() {
+                    self.pending.push(Cmd::MailSync);
+                }
+            } else {
+                c.text(46.0,108.0,&c.fit(&status,10.5,W::Regular,120.0),10.5,W::Regular,color,H::Left);
+            }
         }
-        if self.mail.recent.is_empty(){c.text(186.0,66.0,"还没有收到邮件",11.0,W::Regular,theme::GRAY,H::Left);return;}
+        if self.mail.recent.is_empty(){
+            let message=if connecting { let dots=((self.t*2.0) as usize)%4; format!("正在同步邮件{}","…".repeat(dots).as_str()) }
+                else if self.mail.accounts.iter().filter(|a|a.enabled).any(|a|matches!(self.mail.status_of(&a.email),mail::Status::Failed(_))) {"暂无邮件 · 可点击左侧重试".into()}
+                else {"还没有收到邮件".into()};
+            c.text(186.0,66.0,&message,11.0,W::Regular,theme::GRAY,H::Left);
+            return;
+        }
         let mut content=egui::Ui::new(c.ui.ctx().clone(),egui::Id::new(("mail-list",c.live)),
             egui::UiBuilder::new().max_rect(c.rect(182.0,36.0,198.0,86.0)).layer_id(c.painter.layer_id()).style(c.ui.style().clone()));
         content.set_clip_rect(c.rect(182.0,36.0,198.0,86.0).intersect(c.painter.clip_rect()));
