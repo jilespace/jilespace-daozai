@@ -383,8 +383,9 @@ impl Popup {
         self.expire_undo();
         let viewport_id = egui::ViewportId::from_hash_of("daozai-clipboard");
         let ppp = ctx.pixels_per_point();
+        let (size, min_size) = crate::panel::fitted_window_ctx(ctx, egui::vec2(WIDTH, HEIGHT), egui::vec2(420.0, 360.0));
         #[cfg(windows)]
-        let initial_position = crate::native::clipboard_popup_position(WIDTH, HEIGHT, ppp)
+        let initial_position = crate::native::clipboard_popup_position(size.x, size.y, ppp)
             .map(|(x, y)| egui::pos2(x, y))
             .unwrap_or_else(|| egui::pos2(120.0, 70.0));
         #[cfg(not(windows))]
@@ -397,8 +398,8 @@ impl Popup {
         let builder = egui::ViewportBuilder::default()
             .with_title("剪贴板 · 岛仔")
             .with_icon(theme::app_icon())
-            .with_inner_size([WIDTH, HEIGHT])
-            .with_min_inner_size([420.0, 420.0])
+            .with_inner_size([size.x, size.y])
+            .with_min_inner_size([min_size.x, min_size.y])
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -1926,6 +1927,10 @@ mod tests {
     }
 
     fn render_popup(popup: &mut Popup, dark: bool, query: &str) -> Rendered {
+        render_popup_sized(popup, dark, query, Vec2::new(WIDTH, HEIGHT))
+    }
+
+    fn render_popup_sized(popup: &mut Popup, dark: bool, query: &str, size: Vec2) -> Rendered {
         popup.query = query.to_string();
         popup.sync_selection();
         popup.fade = 1.0;
@@ -1936,7 +1941,7 @@ mod tests {
         for frame in 0..3 {
             let output = ctx.run(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, HEIGHT))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                     time: Some(frame as f64 / 60.0),
                     viewports: std::iter::once((
                         egui::ViewportId::ROOT,
@@ -2054,6 +2059,17 @@ mod tests {
             write_png(&dark, &dest.join("clipboard-dark.png"));
             write_png(&light, &dest.join("clipboard-light.png"));
             write_png(&view, &dest.join("clipboard-preview.png"));
+        }
+    }
+
+    #[test]
+    fn panel_renders_at_reduced_window_size() {
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_items(sample_items());
+        let rendered = render_popup_sized(&mut popup, true, "", Vec2::new(420.0, 340.0));
+        for expected in ["剪贴板", "最近", "粘贴到", "粘贴", "仅复制"] {
+            assert!(contains_text(&rendered.shapes, expected), "小窗口缺少 {expected}");
         }
     }
 

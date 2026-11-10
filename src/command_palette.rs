@@ -772,8 +772,9 @@ impl Panel {
         }
         let viewport_id = egui::ViewportId::from_hash_of("daozai-command-palette");
         let ppp = ctx.pixels_per_point();
+        let (size, min_size) = crate::panel::fitted_window_ctx(ctx, egui::vec2(WIDTH, HEIGHT), egui::vec2(440.0, 340.0));
         #[cfg(windows)]
-        let initial_position = crate::native::clipboard_popup_position(WIDTH, HEIGHT, ppp)
+        let initial_position = crate::native::clipboard_popup_position(size.x, size.y, ppp)
             .map(|(x, y)| egui::pos2(x, y))
             .unwrap_or_else(|| egui::pos2(160.0, 96.0));
         #[cfg(not(windows))]
@@ -786,8 +787,8 @@ impl Panel {
         let builder = egui::ViewportBuilder::default()
             .with_title("命令面板 · 岛仔")
             .with_icon(theme::app_icon())
-            .with_inner_size([WIDTH, HEIGHT])
-            .with_min_inner_size([460.0, 380.0])
+            .with_inner_size([size.x, size.y])
+            .with_min_inner_size([min_size.x, min_size.y])
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -2018,6 +2019,10 @@ mod tests {
     }
 
     fn render_palette(palette: &mut Panel, dark: bool) -> Rendered {
+        render_palette_sized(palette, dark, Vec2::new(WIDTH, HEIGHT))
+    }
+
+    fn render_palette_sized(palette: &mut Panel, dark: bool, size: Vec2) -> Rendered {
         palette.fade = 1.0;
         let ctx = egui::Context::default();
         crate::theme::load_fonts(&ctx);
@@ -2026,7 +2031,7 @@ mod tests {
         for frame in 0..3 {
             let output = ctx.run(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, HEIGHT))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                     time: Some(frame as f64 / 60.0),
                     viewports: std::iter::once((
                         egui::ViewportId::ROOT,
@@ -2186,6 +2191,14 @@ mod tests {
         assert!(play.subtitle.contains("Spotify") && play.subtitle.contains("夜色温柔"));
         assert!(palette.results.iter().any(|entry| entry.action == Action::MediaNext));
         assert!(palette.results.iter().any(|entry| entry.action == Action::MediaPrev));
+    }
+
+    #[test]
+    fn palette_renders_at_reduced_window_size() {
+        let mut palette = palette_for_test("");
+        let rendered = render_palette_sized(&mut palette, true, Vec2::new(440.0, 340.0));
+        assert!(contains(&rendered.shapes, "命令面板"));
+        assert!(contains(&rendered.shapes, "操作"));
     }
 
     #[test]

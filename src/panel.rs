@@ -236,3 +236,60 @@ pub(crate) fn link_button(ui: &mut Ui, label: &str, p: &Palette) -> bool {
     );
     response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
+/// 计算浮层窗口在当前显示器内可用的内尺寸与最小尺寸。
+///
+/// - 正常屏幕返回期望尺寸；
+/// - 小屏/高缩放时按显示器可用区域收缩；
+/// - 最小尺寸不会超过实际尺寸，避免窗口无法变小。
+pub(crate) fn fitted_window(
+    desired: egui::Vec2,
+    minimum: egui::Vec2,
+    monitor: egui::Vec2,
+) -> (egui::Vec2, egui::Vec2) {
+    let max_width = (monitor.x - 24.0).max(240.0);
+    let max_height = (monitor.y - 48.0).max(180.0);
+    let size = egui::vec2(desired.x.min(max_width), desired.y.min(max_height));
+    let min = egui::vec2(minimum.x.min(size.x), minimum.y.min(size.y));
+    (size, min)
+}
+
+/// 读取当前显示器尺寸并计算浮层窗口尺寸；未知显示器时保持期望尺寸。
+pub(crate) fn fitted_window_ctx(
+    ctx: &egui::Context,
+    desired: egui::Vec2,
+    minimum: egui::Vec2,
+) -> (egui::Vec2, egui::Vec2) {
+    let monitor = ctx
+        .input(|input| input.viewport().monitor_size)
+        .unwrap_or(desired);
+    fitted_window(desired, minimum, monitor)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fitted_windows_shrink_on_small_monitors() {
+        let (size, min) = fitted_window(
+            egui::vec2(560.0, 520.0),
+            egui::vec2(420.0, 360.0),
+            egui::vec2(1920.0, 1080.0),
+        );
+        assert_eq!(size, egui::vec2(560.0, 520.0));
+        assert_eq!(min, egui::vec2(420.0, 360.0));
+        let (size, min) = fitted_window(
+            egui::vec2(560.0, 520.0),
+            egui::vec2(420.0, 360.0),
+            egui::vec2(683.0, 384.0),
+        );
+        assert!(size.x <= 659.0 && size.y <= 336.0, "小屏应收缩窗口：{size:?}");
+        assert!(min.x <= size.x && min.y <= size.y, "最小尺寸不能超过窗口：{min:?}");
+        let (tiny, tiny_min) = fitted_window(
+            egui::vec2(560.0, 520.0),
+            egui::vec2(420.0, 360.0),
+            egui::vec2(300.0, 220.0),
+        );
+        assert!(tiny.x >= 240.0 && tiny.y >= 180.0, "极窄屏仍保留可用尺寸");
+        assert!(tiny_min.x <= tiny.x && tiny_min.y <= tiny.y);
+    }
+}

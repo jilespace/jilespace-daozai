@@ -104,8 +104,9 @@ impl Popup {
         }
         let viewport_id = egui::ViewportId::from_hash_of("daozai-notifications");
         let ppp = ctx.pixels_per_point();
+        let (size, min_size) = crate::panel::fitted_window_ctx(ctx, egui::vec2(WIDTH, HEIGHT), egui::vec2(340.0, 300.0));
         #[cfg(windows)]
-        let initial_position = crate::native::clipboard_popup_position(WIDTH, HEIGHT, ppp)
+        let initial_position = crate::native::clipboard_popup_position(size.x, size.y, ppp)
             .map(|(x, y)| egui::pos2(x, y))
             .unwrap_or_else(|| egui::pos2(140.0, 80.0));
         #[cfg(not(windows))]
@@ -118,8 +119,8 @@ impl Popup {
         let builder = egui::ViewportBuilder::default()
             .with_title("通知 · 岛仔")
             .with_icon(theme::app_icon())
-            .with_inner_size([WIDTH, HEIGHT])
-            .with_min_inner_size([WIDTH, HEIGHT])
+            .with_inner_size([size.x, size.y])
+            .with_min_inner_size([min_size.x, min_size.y])
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(false)
@@ -182,7 +183,10 @@ impl Popup {
                     .inner_margin(INNER)
                     .shadow(panel::shadow(dark))
                     .show(ui, |ui| {
-                        ui.set_min_size(Vec2::new(WIDTH - (PAD + INNER) * 2.0, HEIGHT - (PAD + INNER) * 2.0));
+                        ui.set_min_size(Vec2::new(
+            (WIDTH - (PAD + INNER) * 2.0).min(ui.available_width().max(1.0)),
+            (HEIGHT - (PAD + INNER) * 2.0).min(ui.available_height().max(1.0)),
+        ));
                         ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
                         self.header(ui, &palette, &mut action);
                         ui.add_space(2.0);
@@ -442,6 +446,10 @@ mod tests {
     }
 
     fn render(popup: &mut Popup, dark: bool) -> Rendered {
+        render_sized(popup, dark, Vec2::new(WIDTH, HEIGHT))
+    }
+
+    fn render_sized(popup: &mut Popup, dark: bool, size: Vec2) -> Rendered {
         popup.fade = 1.0;
         let ctx = egui::Context::default();
         crate::theme::load_fonts(&ctx);
@@ -450,7 +458,7 @@ mod tests {
         for frame in 0..3 {
             let output = ctx.run(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, HEIGHT))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                     time: Some(frame as f64 / 60.0),
                     viewports: std::iter::once((
                         egui::ViewportId::ROOT,
@@ -532,6 +540,16 @@ mod tests {
         let rendered = render(&mut popup, true);
         assert!(contains(&rendered.shapes, "微信"));
         assert!(!contains(&rendered.shapes, "Outlook"), "只看未读应隐藏已读条目");
+    }
+
+    #[test]
+    fn renders_at_reduced_window_size() {
+        let mut popup = Popup::default();
+        popup.open(sample(), 1, String::new());
+        let rendered = render_sized(&mut popup, true, Vec2::new(340.0, 300.0));
+        for expected in ["通知", "微信", "复制", "静音"] {
+            assert!(contains(&rendered.shapes, expected), "小窗口缺少 {expected}");
+        }
     }
 
     #[test]
