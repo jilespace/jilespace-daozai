@@ -3832,9 +3832,14 @@ fn settings_render_on_a_small_viewport_with_scrollable_sidebar() {
         *capture.lock().unwrap()=Some(ctx.run(raw,|ctx|(viewport.viewport_ui_cb)(ctx)));
     });
     let mut texts=Vec::new();
+    let mut root_textures=Vec::new();
+    let mut child_textures=Vec::new();
+    let mut last_child=None;
     for _ in 0..3 {
-        let _root=h.ctx.run(egui::RawInput::default(),|ctx|h.app.settings_ui(ctx,false));
+        let root=h.ctx.run(egui::RawInput::default(),|ctx|h.app.settings_ui(ctx,false));
+        root_textures.push(root.textures_delta.clone());
         if let Some(child)=output.lock().unwrap().take(){
+            child_textures.push(child.textures_delta.clone());
             fn collect(shape:&egui::Shape,out:&mut Vec<String>){
                 match shape {
                     egui::Shape::Text(text)=>out.push(text.galley.text().to_string()),
@@ -3844,11 +3849,25 @@ fn settings_render_on_a_small_viewport_with_scrollable_sidebar() {
             }
             texts.clear();
             for clipped in &child.shapes {collect(&clipped.shape,&mut texts);}
+            last_child=Some(child);
         }
     }
     assert!(texts.iter().any(|text|text=="设置"),"小窗口应保留侧栏标题");
     assert!(texts.iter().any(|text|text.contains("常规")),"小窗口侧栏应仍可显示设置分组");
     assert!(texts.iter().any(|text|text.contains("另一")||text.contains("外观")||text.contains("常规")),"内容不应崩溃");
+    if let Some(dest)=std::env::var_os("DAOZAI_SETTINGS_SMALL_PREVIEW_DIR").filter(|value|!value.is_empty()) {
+        let dest=std::path::PathBuf::from(dest);
+        std::fs::create_dir_all(&dest).unwrap();
+        if let Some(child)=last_child {
+            let mut raster=crate::preview_raster::Raster::new(560,400);
+            for delta in root_textures.iter().chain(child_textures.iter()) {raster.update_textures(delta);}
+            raster.buf.fill([0.0,0.0,0.0,1.0]);
+            raster.draw(&h.ctx.tessellate(child.shapes,child.pixels_per_point),child.pixels_per_point);
+            let mut rgba=Vec::new();
+            raster.to_rgba8(&mut rgba);
+            image::save_buffer(dest.join("settings-small.png"),&rgba,560,400,image::ColorType::Rgba8).unwrap();
+        }
+    }
 }
 
 #[test]

@@ -1211,8 +1211,10 @@ impl App {
             }
             if ctx.input(|i|i.viewport().close_requested()){self.settings_open=false;}
             let before=format!("{:?}",self.settings);
-            egui::SidePanel::left("settings-sidebar").resizable(false).exact_width(180.0).frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(29,29,32),Color32::from_rgb(237,239,243))).stroke(egui::Stroke::new(1.0_f32,settings_color(ctx,Color32::from_rgb(42,42,45),Color32::from_rgb(216,219,225)))).inner_margin(egui::Margin::symmetric(10,12))).show(ctx,|ui|{
-                egui::ScrollArea::vertical().id_salt("settings-sidebar-scroll").auto_shrink([false,false]).show(ui,|ui|{
+            let sidebar_bg=settings_color(ctx,Color32::from_rgb(29,29,32),Color32::from_rgb(237,239,243));
+            let central_bg=settings_color(ctx,Color32::from_rgb(25,25,27),Color32::from_rgb(246,247,249));
+            egui::SidePanel::left("settings-sidebar").resizable(false).exact_width(180.0).frame(egui::Frame::new().fill(sidebar_bg).stroke(egui::Stroke::new(1.0_f32,settings_color(ctx,Color32::from_rgb(42,42,45),Color32::from_rgb(216,219,225)))).inner_margin(egui::Margin::symmetric(10,12))).show(ctx,|ui|{
+                let scroll=egui::ScrollArea::vertical().id_salt("settings-sidebar-scroll").auto_shrink([false,false]).scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::VisibleWhenNeeded).show(ui,|ui|{
                 ui.set_width(ui.available_width());
                 ui.add_space(5.0);
                 ui.label(egui::RichText::new("设置").size(11.0).color(settings_color(ctx,Color32::from_gray(150),Color32::from_gray(105))));
@@ -1242,7 +1244,10 @@ impl App {
                             None => continue,
                         }
                     };
-                    if start==9 {ui.add_space((ui.available_height()-38.0).max(0.0));}
+                    if start==9 {
+                        let list_height=11.0*39.0+78.0;
+                        ui.add_space((ui.clip_rect().height()-list_height).max(0.0));
+                    }
                     let selected=(start..=end).contains(&self.settings_tab);
                     let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),36.0),egui::Sense::click());
                     if response.clicked() && !selected{self.settings_tab=target;}
@@ -1268,8 +1273,16 @@ impl App {
                     ui.add_space(3.0);
                 }
                 });
+                if scroll.content_size.y > scroll.inner_rect.height()+1.0 {
+                    let rect=ui.max_rect();
+                    for step in 0..6 {
+                        let k=step as f32/5.0;
+                        let strip=egui::Rect::from_min_size(egui::pos2(rect.left(),rect.bottom()-22.0+step as f32*4.0),egui::vec2(rect.width(),4.0));
+                        ui.painter().rect_filled(strip,0.0,Color32::from_rgba_unmultiplied(sidebar_bg.r(),sidebar_bg.g(),sidebar_bg.b(),(26.0+32.0*k) as u8));
+                    }
+                }
             });
-            egui::CentralPanel::default().frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(25,25,27),Color32::from_rgb(246,247,249))).inner_margin(egui::Margin::symmetric(22,16))).show(ctx,|ui|{
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(central_bg).inner_margin(egui::Margin::symmetric(22,16))).show(ctx,|ui|{
                 ui.spacing_mut().item_spacing=egui::vec2(8.0,5.0);
                 ui.spacing_mut().button_padding=egui::vec2(10.0,6.0);
                 ui.style_mut().text_styles.insert(egui::TextStyle::Small,egui::FontId::proportional(12.0));
@@ -1301,7 +1314,7 @@ impl App {
                     }
                 }
                 ui.add_space(6.0);
-                egui::ScrollArea::vertical().id_salt(("settings-scroll",self.settings_tab)).auto_shrink([false,false]).show(ui,|ui|{
+                let scroll=egui::ScrollArea::vertical().id_salt(("settings-scroll",self.settings_tab)).auto_shrink([false,false]).scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::VisibleWhenNeeded).show(ui,|ui|{
                     match self.settings_tab {
                     11=>self.quota_settings(ui),
                     12=>self.clipboard_settings(ui),
@@ -1798,6 +1811,14 @@ impl App {
                     }
                     }
                 });
+                if scroll.content_size.y > scroll.inner_rect.height()+1.0 {
+                    let rect=ui.max_rect();
+                    for step in 0..6 {
+                        let k=step as f32/5.0;
+                        let strip=egui::Rect::from_min_size(egui::pos2(rect.left(),rect.bottom()-24.0+step as f32*4.0),egui::vec2(rect.width(),4.0));
+                        ui.painter().rect_filled(strip,0.0,Color32::from_rgba_unmultiplied(central_bg.r(),central_bg.g(),central_bg.b(),(18.0+30.0*k) as u8));
+                    }
+                }
             });
             if before!=format!("{:?}",self.settings){self.settings.save();}
             ctx.set_style(original_style);
