@@ -1402,6 +1402,9 @@ impl App {
                                 ("截屏框选取字","框选屏幕区域后本地 OCR 识别","Ctrl+Alt+Shift+O"),
                                 ("截屏保存","框选后复制图片并保存到「图片\\岛仔截图」","Ctrl+Alt+Shift+S"),
                                 ("滚动截图","框选区域后滚动页面，自动拼接成长图","Ctrl+Alt+Shift+L"),
+                                ("音量 +5%","调高系统默认输出音量","Ctrl+Alt+↑"),
+                                ("音量 -5%","调低系统默认输出音量","Ctrl+Alt+↓"),
+                                ("静音","切换默认输出设备静音","Ctrl+Alt+M"),
                             ] {
                                 ui.horizontal(|ui|{
                                     ui.vertical(|ui|{

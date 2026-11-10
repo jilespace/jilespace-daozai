@@ -80,6 +80,8 @@ struct Shell {
     pins: Vec<daozai::pin::Pin>,
     pins_restored: bool,
     pins_persist_last: bool,
+    /// 音量 HUD（调整音量/静音时短暂显示）。
+    volume_hud: daozai::volume_hud::Hud,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -195,6 +197,7 @@ impl Shell {
             pins: Vec::new(),
             pins_restored: false,
             pins_persist_last: remember_pins,
+            volume_hud: Default::default(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -613,6 +616,20 @@ impl Shell {
         ctx.request_repaint();
     }
 
+    fn volume_step(&mut self, delta: f32) {
+        match daozai::volume::adjust(delta) {
+            Some(state) => self.volume_hud.show(state),
+            None => self.app.say("无法读取系统音量"),
+        }
+    }
+
+    fn volume_toggle_mute(&mut self) {
+        match daozai::volume::toggle_mute() {
+            Some(state) => self.volume_hud.show(state),
+            None => self.app.say("无法读取系统音量"),
+        }
+    }
+
     fn start_region_scroll(&mut self, ctx: &egui::Context) {
         self.start_region_capture(ctx, daozai::capture_ui::Purpose::Scroll);
     }
@@ -986,6 +1003,18 @@ impl Shell {
                 self.close_command_palette();
                 self.start_region_scroll(ctx);
             }
+            PaletteAction::VolumeUp => {
+                self.close_command_palette();
+                self.volume_step(daozai::volume::STEP);
+            }
+            PaletteAction::VolumeDown => {
+                self.close_command_palette();
+                self.volume_step(-daozai::volume::STEP);
+            }
+            PaletteAction::VolumeMute => {
+                self.close_command_palette();
+                self.volume_toggle_mute();
+            }
             PaletteAction::CopyClipboard(id) => {
                 self.close_command_palette();
                 self.clipboard.copy(&id);
@@ -1089,6 +1118,18 @@ impl eframe::App for Shell {
             let image_ocr = daozai::native::take_ocr_hotkey();
             let notification_hotkey = daozai::native::take_notification_hotkey();
             let scroll_hotkey = daozai::native::take_scroll_hotkey();
+            let volume_up = daozai::native::take_volume_up_hotkey();
+            let volume_down = daozai::native::take_volume_down_hotkey();
+            let volume_mute = daozai::native::take_volume_mute_hotkey();
+            if volume_up || volume_down || volume_mute {
+                if volume_up {
+                    self.volume_step(daozai::volume::STEP);
+                } else if volume_down {
+                    self.volume_step(-daozai::volume::STEP);
+                } else {
+                    self.volume_toggle_mute();
+                }
+            }
             if self.scroll_capture.is_some() {
                 if scroll_hotkey {
                     self.finish_scroll_capture(ctx);
@@ -1337,9 +1378,10 @@ impl eframe::App for Shell {
         self.show_scroll_capture(ctx);
         self.show_annotate(ctx);
         self.show_pins(ctx);
+        self.volume_hud.poll(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() || self.volume_hud.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after

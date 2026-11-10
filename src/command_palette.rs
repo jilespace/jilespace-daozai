@@ -54,6 +54,9 @@ pub enum Action {
     CopyClipboard(String),
     ClosePins,
     ScrollCapture,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -475,6 +478,31 @@ impl Panel {
                 Glyph::Gear,
                 Action::RefreshWeather,
             ));
+        }
+        for (id, title, subtitle, keywords, palette_action) in [
+            (
+                "action-volume-up",
+                "音量 +5%",
+                "调高系统默认输出音量",
+                "音量 声音 volume up 调高",
+                Action::VolumeUp,
+            ),
+            (
+                "action-volume-down",
+                "音量 −5%",
+                "调低系统默认输出音量",
+                "音量 声音 volume down 调低",
+                Action::VolumeDown,
+            ),
+            (
+                "action-volume-mute",
+                "静音 / 取消静音",
+                "切换系统默认输出设备的静音状态",
+                "静音 声音 mute volume",
+                Action::VolumeMute,
+            ),
+        ] {
+            entries.push(action(id, title, subtitle, keywords, Glyph::Gear, palette_action));
         }
         if snapshot.pins > 0 {
             entries.push(action(

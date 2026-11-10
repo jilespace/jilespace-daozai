@@ -46,6 +46,13 @@ static CROP_HOTKEY: AtomicBool = AtomicBool::new(false);
 /// 全局滚动截图热键。
 const SCROLL_HOTKEY_ID: i32 = 0xDA10;
 static SCROLL_HOTKEY: AtomicBool = AtomicBool::new(false);
+/// 音量快捷键：Ctrl+Alt+↑/↓/M。
+const VOLUME_UP_HOTKEY_ID: i32 = 0xDA11;
+const VOLUME_DOWN_HOTKEY_ID: i32 = 0xDA12;
+const VOLUME_MUTE_HOTKEY_ID: i32 = 0xDA13;
+static VOLUME_UP: AtomicBool = AtomicBool::new(false);
+static VOLUME_DOWN: AtomicBool = AtomicBool::new(false);
+static VOLUME_MUTE: AtomicBool = AtomicBool::new(false);
 /// 全局截图热键。
 const SCREENSHOT_HOTKEY_ID: i32 = 0xDA0F;
 static SCREENSHOT_HOTKEY: AtomicBool = AtomicBool::new(false);
@@ -124,6 +131,18 @@ unsafe extern "system" fn subclass(
     }
     if msg == WM_HOTKEY && wp.0 as i32 == SCROLL_HOTKEY_ID {
         SCROLL_HOTKEY.store(true, Ordering::Relaxed);
+        return LRESULT(0);
+    }
+    if msg == WM_HOTKEY && wp.0 as i32 == VOLUME_UP_HOTKEY_ID {
+        VOLUME_UP.store(true, Ordering::Relaxed);
+        return LRESULT(0);
+    }
+    if msg == WM_HOTKEY && wp.0 as i32 == VOLUME_DOWN_HOTKEY_ID {
+        VOLUME_DOWN.store(true, Ordering::Relaxed);
+        return LRESULT(0);
+    }
+    if msg == WM_HOTKEY && wp.0 as i32 == VOLUME_MUTE_HOTKEY_ID {
+        VOLUME_MUTE.store(true, Ordering::Relaxed);
         return LRESULT(0);
     }
     if msg == WM_HOTKEY && wp.0 as i32 == NOTIFICATION_HOTKEY_ID {
@@ -330,6 +349,55 @@ pub fn take_scroll_hotkey() -> bool {
 #[cfg(test)]
 pub(crate) fn test_scroll_hotkey_press() {
     SCROLL_HOTKEY.store(true, Ordering::Relaxed);
+}
+
+pub fn register_volume_hotkeys(hwnd: HWND) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_DOWN, VK_UP,
+    };
+    let modifiers = HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_ALT.0 | MOD_NOREPEAT.0);
+    let mut first_error = None;
+    for (id, key) in [
+        (VOLUME_UP_HOTKEY_ID, VK_UP.0 as u32),
+        (VOLUME_DOWN_HOTKEY_ID, VK_DOWN.0 as u32),
+        (VOLUME_MUTE_HOTKEY_ID, 'M' as u32),
+    ] {
+        if let Err(_) = unsafe { RegisterHotKey(hwnd, id, modifiers, key) } {
+            first_error.get_or_insert("全局音量快捷键被其他程序占用".to_string());
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+pub fn unregister_volume_hotkeys(hwnd: HWND) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
+    unsafe {
+        let _ = UnregisterHotKey(hwnd, VOLUME_UP_HOTKEY_ID);
+        let _ = UnregisterHotKey(hwnd, VOLUME_DOWN_HOTKEY_ID);
+        let _ = UnregisterHotKey(hwnd, VOLUME_MUTE_HOTKEY_ID);
+    }
+}
+
+pub fn take_volume_up_hotkey() -> bool {
+    VOLUME_UP.swap(false, Ordering::Relaxed)
+}
+
+pub fn take_volume_down_hotkey() -> bool {
+    VOLUME_DOWN.swap(false, Ordering::Relaxed)
+}
+
+pub fn take_volume_mute_hotkey() -> bool {
+    VOLUME_MUTE.swap(false, Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn test_volume_hotkey_press(up: bool, down: bool, mute: bool) {
+    VOLUME_UP.store(up, Ordering::Relaxed);
+    VOLUME_DOWN.store(down, Ordering::Relaxed);
+    VOLUME_MUTE.store(mute, Ordering::Relaxed);
 }
 
 pub fn register_screenshot_hotkey(hwnd: HWND) -> Result<(), String> {
@@ -661,6 +729,7 @@ pub struct Window {
     pub notification_hotkey_error: Option<String>,
     pub screenshot_hotkey_error: Option<String>,
     pub scroll_hotkey_error: Option<String>,
+    pub volume_hotkey_error: Option<String>,
 }
 
 impl Window {
@@ -687,7 +756,8 @@ impl Window {
         let notification_hotkey_error = register_notification_hotkey(hwnd).err();
         let screenshot_hotkey_error = register_screenshot_hotkey(hwnd).err();
         let scroll_hotkey_error = register_scroll_hotkey(hwnd).err();
-        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error, command_hotkey_error, ocr_hotkey_error, crop_hotkey_error, notification_hotkey_error, screenshot_hotkey_error, scroll_hotkey_error })
+        let volume_hotkey_error = register_volume_hotkeys(hwnd).err();
+        Some(Self { hwnd, region: (0, 0, 0, 0), expanded: false, hook, browser_state:(None,PollClock::default()), drag_capture:DragCapture::default(), hotkey_error, command_hotkey_error, ocr_hotkey_error, crop_hotkey_error, notification_hotkey_error, screenshot_hotkey_error, scroll_hotkey_error, volume_hotkey_error })
     }
 
     pub fn browser_at_top(&mut self)->Option<bool> {
@@ -751,6 +821,7 @@ impl Drop for Window {
         unregister_notification_hotkey(self.hwnd);
         unregister_screenshot_hotkey(self.hwnd);
         unregister_scroll_hotkey(self.hwnd);
+        unregister_volume_hotkeys(self.hwnd);
         unsafe {
             let _ = RemoveWindowSubclass(self.hwnd, Some(subclass), SUBCLASS_ID);
             if !self.hook.is_invalid() {
@@ -858,7 +929,7 @@ mod tests {
             assert!(above(cover.0,island.0),"先复现其他窗口盖住岛体");
             let foreground=GetForegroundWindow();
             let saved=hit().lock().unwrap_or_else(|e|e.into_inner()).clone();
-            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None,command_hotkey_error:None,ocr_hotkey_error:None,crop_hotkey_error:None,notification_hotkey_error:None,screenshot_hotkey_error:None,scroll_hotkey_error:None};
+            let mut native=Window{hwnd:island.0,region:(0,0,0,0),expanded:false,hook:HWINEVENTHOOK::default(),browser_state:(None,PollClock::now()),drag_capture:DragCapture::default(),hotkey_error:None,command_hotkey_error:None,ocr_hotkey_error:None,crop_hotkey_error:None,notification_hotkey_error:None,screenshot_hotkey_error:None,scroll_hotkey_error:None,volume_hotkey_error:None};
             let update=|native:&mut Window,expanded|native.update((0.0,0.0,416.0,140.0),(0.0,0.0,416.0,140.0),None,None,1.0,false,expanded);
             update(&mut native,true);
             assert!(above(island.0,cover.0),"展开时必须重新抬高实际窗口层级，不能只检查置顶标记");
@@ -1003,6 +1074,19 @@ mod tests {
         test_notification_hotkey_press();
         assert!(take_notification_hotkey());
         assert!(!take_notification_hotkey());
+    }
+
+    #[test]
+    fn volume_hotkey_flags_are_consumed_once() {
+        test_volume_hotkey_press(true, false, true);
+        assert!(take_volume_up_hotkey());
+        assert!(take_volume_mute_hotkey());
+        assert!(!take_volume_mute_hotkey());
+        assert!(!take_volume_up_hotkey());
+        assert!(!take_volume_down_hotkey());
+        test_volume_hotkey_press(false, true, false);
+        assert!(take_volume_down_hotkey());
+        assert!(!take_volume_down_hotkey());
     }
 
     #[test]
