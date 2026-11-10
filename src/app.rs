@@ -2384,8 +2384,10 @@ impl App {
             c.fill(x, dot_y - 2.0, w, 4.0, 2.0, col);
             let hr = c.hit(x - 2.0, dot_y - 6.0, w + 4.0, 12.0, ("dot", i));
             hr.clone().on_hover_text(PAGE_NAMES[i]);
-            if hr.hovered() && i != self.page {
-                c.fill(x - 1.0, dot_y - 3.0, w + 2.0, 6.0, 3.0, Color32::from_white_alpha(28));
+            let hover=c.ui.ctx().animate_bool_with_time(egui::Id::new(("page-dot-hover",i)),hr.hovered()&&i!=self.page,0.10);
+            if hover>0.01 {
+                c.fill(x - 1.0, dot_y - 3.0, w + 2.0, 6.0, 3.0, Color32::from_white_alpha((hover*28.0) as u8));
+                if hover<0.99 {c.ui.ctx().request_repaint();}
             }
             if hr.clicked() {
                 clicked = Some(i);

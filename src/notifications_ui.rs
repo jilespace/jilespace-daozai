@@ -242,7 +242,7 @@ impl Popup {
                         ui.add_space(gap);
                         ui.separator();
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Esc 关闭 · 复制按钮保存正文").size(10.0).color(palette.faint));
+                            ui.label(RichText::new("Esc 关闭 · 复制按钮复制通知内容").size(10.0).color(palette.faint));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if !self.items.is_empty() {
                                     if ui
