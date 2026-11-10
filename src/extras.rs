@@ -796,6 +796,50 @@ fn setting_choices(ui:&mut egui::Ui,title:&str,value:&mut u32,values:[u32;3],uni
         });
     });
 }
+/// 设置页内容区顶部的小标签芯片：选中/悬停都做平滑过渡。
+fn settings_tab_chip(ui: &mut egui::Ui, label: &str, selected: bool, index: usize) -> bool {
+    let ctx = ui.ctx().clone();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(68.0, 26.0), egui::Sense::click());
+    let id = egui::Id::new(("settings-tab-chip", index));
+    let selected_t = ctx.animate_bool_with_time(id.with("selected"), selected, 0.16);
+    let hover_t = ctx.animate_bool_with_time(id.with("hover"), response.hovered() && !selected, 0.10);
+    if selected_t < 0.999 || hover_t < 0.999 {
+        ctx.request_repaint();
+    }
+    let selected_fill = settings_color(&ctx, Color32::from_rgb(70, 70, 74), Color32::from_rgb(205, 215, 229));
+    let hover_fill = settings_color(&ctx, Color32::from_rgb(48, 48, 52), Color32::from_rgb(224, 229, 238));
+    if selected_t > 0.01 {
+        ui.painter().rect_filled(
+            rect,
+            6.0,
+            Color32::from_rgba_unmultiplied(selected_fill.r(), selected_fill.g(), selected_fill.b(), (selected_t * 255.0) as u8),
+        );
+    }
+    if hover_t > 0.01 {
+        ui.painter().rect_filled(
+            rect,
+            6.0,
+            Color32::from_rgba_unmultiplied(hover_fill.r(), hover_fill.g(), hover_fill.b(), (hover_t * 200.0) as u8),
+        );
+    }
+    let color = if selected {
+        settings_color(&ctx, Color32::WHITE, Color32::from_rgb(30, 34, 41))
+    } else {
+        settings_color(&ctx, Color32::from_gray(210), Color32::from_gray(55))
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        color,
+    );
+    if response.hovered() {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.clicked()
+}
+
 const SETTINGS_TITLES: [&str; 15] = ["常规", "音乐与歌词", "专注", "饮水", "待办", "置物", "通知", "邮箱", "日程", "关于", "页面管理", "AI 额度", "剪贴板", "岛体外观", "天气"];
 
 /// 设置窗口在窄屏/高缩放下收缩内尺寸，侧栏内容通过滚动保持可用。
@@ -1302,7 +1346,20 @@ impl App {
                 ui.visuals_mut().widgets.active.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().selection.bg_fill=settings_color(ctx,Color32::from_rgb(45,105,165),Color32::from_rgb(209,226,248));
                 let titles = SETTINGS_TITLES;
-                ui.label(egui::RichText::new(titles[self.settings_tab.min(14)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
+                let saved = self.settings_saved_at.and_then(|at| {
+                    let age = ctx.input(|input| input.time) - at;
+                    (age >= 0.0 && age < 1.8).then_some(age)
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(titles[self.settings_tab.min(14)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
+                    if let Some(age) = saved {
+                        let alpha = (1.0 - ((age - 1.3) / 0.5).clamp(0.0, 1.0)) as f32;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new("已自动保存").size(10.5).color(Color32::from_rgba_unmultiplied(theme::GREEN.r(),theme::GREEN.g(),theme::GREEN.b(),(alpha*255.0) as u8)));
+                        });
+                        ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                    }
+                });
                 if let Some((_,start,end))=SETTINGS_GROUPS.iter().find(|(_,start,end)|(*start..=*end).contains(&self.settings_tab)) {
                     if start!=end {
                         ui.add_space(7.0);
@@ -1311,10 +1368,7 @@ impl App {
                             ui.horizontal(|ui|{
                                 for index in *start..=*end {
                                     let selected=self.settings_tab==index;
-                                    let button=egui::Button::new(egui::RichText::new(titles[index]).size(12.0).color(if selected{settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))}else{settings_color(ctx,Color32::from_gray(210),Color32::from_gray(55))}))
-                                        .fill(if selected{settings_color(ctx,Color32::from_rgb(70,70,74),Color32::from_rgb(205,215,229))}else{Color32::TRANSPARENT})
-                                        .stroke(egui::Stroke::NONE).corner_radius(6.0);
-                                    if ui.add_sized([68.0,26.0],button).clicked(){self.settings_tab=index;}
+                                    if settings_tab_chip(ui,titles[index],selected,index){self.settings_tab=index;}
                                 }
                             });
                         });
@@ -1827,7 +1881,7 @@ impl App {
                     }
                 }
             });
-            if before!=format!("{:?}",self.settings){self.settings.save();}
+            if before!=format!("{:?}",self.settings){self.settings.save();self.settings_saved_at=Some(ctx.input(|input|input.time));}
             ctx.set_style(original_style);
         });
     }

@@ -653,6 +653,7 @@ pub struct App {
     browser_at_top:bool,
     browser_minimal_active:bool,
     pub(crate) settings_focus_requested:bool,
+    pub(crate) settings_saved_at:Option<f64>,
     pub(crate) settings_tab:usize,
     /// 设置侧栏搜索关键字（打开设置时清空）。
     pub(crate) settings_query:String,
@@ -798,7 +799,7 @@ impl App {
             media_anchor: (String::new(), 0.0, 0.0, false),
             media: NowPlaying::default(),
             music_artwork: None,
-            forced_open_until:0.0, settings_open:false, browser_at_top:false, browser_minimal_active:false, settings_focus_requested:false, settings_tab:0, settings_query:String::new(), settings_category:0, notification_apps:model::NotificationApps::load(), subpage:None, task_dialog:None,
+            forced_open_until:0.0, settings_open:false, browser_at_top:false, browser_minimal_active:false, settings_focus_requested:false, settings_saved_at:None, settings_tab:0, settings_query:String::new(), settings_category:0, notification_apps:model::NotificationApps::load(), subpage:None, task_dialog:None,
             listener_status: "尚未连接".into(),
             clipboard_status: String::new(),
             notification_bell_until: 0.0, notification_bell_at: -10.0, notice: None, hud_notice: None, hud_alpha: 0.0, notice_width:Spring::new(0.0,CLOSE.0,CLOSE.1), notice_details:false, alerts: Default::default(), history: Default::default(), pending: vec![],

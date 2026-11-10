@@ -3864,6 +3864,7 @@ fn settings_render_on_a_small_viewport_with_scrollable_sidebar() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
     h.app.settings_tab=0;
+    h.app.settings_saved_at=Some(0.0);
     h.app.open_settings();
     h.ctx.set_embed_viewports(false);
     let output=std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -3896,6 +3897,7 @@ fn settings_render_on_a_small_viewport_with_scrollable_sidebar() {
         }
     }
     assert!(texts.iter().any(|text|text=="设置"),"小窗口应保留侧栏标题");
+    assert!(texts.iter().any(|text|text.contains("已自动保存")),"设置修改后应显示保存回执");
     assert!(texts.iter().any(|text|text.contains("常规")),"小窗口侧栏应仍可显示设置分组");
     assert!(texts.iter().any(|text|text.contains("另一")||text.contains("外观")||text.contains("常规")),"内容不应崩溃");
     if let Some(dest)=std::env::var_os("DAOZAI_SETTINGS_SMALL_PREVIEW_DIR").filter(|value|!value.is_empty()) {
@@ -3918,6 +3920,7 @@ fn settings_search_filters_tabs_and_reports_no_match() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
     h.app.settings_tab=0;
+    h.app.settings_saved_at=Some(0.0);
     h.app.open_settings();
     h.ctx.set_embed_viewports(false);
     h.app.settings_query="天气".into();
