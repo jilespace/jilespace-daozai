@@ -172,7 +172,12 @@ impl App {
                     c.centered_text(355.0,y+4.0,&format!("{:.0}%",w.remaining),22.0,W::Semibold,theme::WHITE,H::Right);
                 }
             }
-        }else{let message=if self.quota.busy.contains(&a.id){"正在更新额度…"}else{result.and_then(|r|r.as_ref().err()).map(String::as_str).unwrap_or("等待更新额度")};for(i,line)in c.wrap(message,11.0,W::Regular,197.0,2).iter().enumerate(){c.text(157.0,87.0+i as f32*17.0,line,11.0,W::Regular,theme::GRAY,H::Left);}}
+        }else{
+            let error=result.and_then(|r|r.as_ref().err());
+            let message=if self.quota.busy.contains(&a.id){"正在更新额度…".to_string()}else if let Some(error)=error{format!("{error} · 点击右上角刷新")}else{"等待更新额度".to_string()};
+            let color=if error.is_some(){Color32::from_rgb(235,150,120)}else{theme::GRAY};
+            for(i,line)in c.wrap(&message,11.0,W::Regular,197.0,2).iter().enumerate(){c.text(157.0,87.0+i as f32*17.0,line,11.0,W::Regular,color,H::Left);}
+        }
     }
     pub(crate) fn quota_settings(&mut self,ui:&mut egui::Ui){
         let before=self.quota.config.clone();settings_label(ui,"显示");settings_card(ui,|ui|{

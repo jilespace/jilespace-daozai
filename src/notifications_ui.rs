@@ -28,6 +28,30 @@ pub enum Action {
     Clear,
 }
 
+/// 按像素宽度截断文本并补 `…`（用于通知应用名等单行标签）。
+fn truncate_to_width(ui: &egui::Ui, text: &str, font: egui::FontId, max_width: f32) -> String {
+    let width = |value: &str| {
+        ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(value.to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    if width(text) <= max_width {
+        return text.to_owned();
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let candidate: String = chars.iter().collect::<String>() + "…";
+        if width(&candidate) <= max_width {
+            return candidate;
+        }
+    }
+    "…".into()
+}
+
 pub struct Popup {
     pub open: bool,
     items: Vec<Notification>,
@@ -251,7 +275,7 @@ impl Popup {
 
     fn header(&mut self, ui: &mut egui::Ui, palette: &panel::Palette, action: &mut Action) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("通知").size(19.0).strong().color(palette.text));
+            ui.label(RichText::new("通知").font(theme::font(16.0, theme::W::Semibold)).color(palette.text));
             if self.unread > 0 {
                 egui::Frame::new()
                     .fill(panel::with_alpha(palette.accent, 0.18))
@@ -376,10 +400,13 @@ impl Popup {
                                     let (dot, _) = ui.allocate_exact_size(Vec2::new(7.0, 7.0), egui::Sense::hover());
                                     ui.painter().circle_filled(dot.center(), 2.5, palette.accent);
                                 }
+                                // 应用名过长时按可用宽度截断，避免把右侧操作挤出行外。
+                                let app_width = (ui.available_width() - 156.0).max(48.0);
+                                let app_font = theme::font(12.0, theme::W::Semibold);
+                                let app = truncate_to_width(ui, &item.app, app_font.clone(), app_width);
                                 ui.label(
-                                    RichText::new(&item.app)
-                                        .size(12.0)
-                                        .strong()
+                                    RichText::new(app)
+                                        .font(app_font)
                                         .color(if unread { palette.text } else { palette.muted }),
                                 );
                                 ui.label(RichText::new(time_label(item.at, *now)).size(9.5).color(palette.faint));
@@ -589,6 +616,33 @@ mod tests {
             let mut rgba = Vec::new();
             raster.to_rgba8(&mut rgba);
             image::save_buffer(dest.join("notifications-small.png"), &rgba, (size.x*ppp) as u32, (size.y*ppp) as u32, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
+    #[test]
+    fn long_app_names_are_truncated_in_narrow_panels() {
+        let mut items = sample();
+        items.insert(0, Notification {
+            app: "一个非常非常长的通知应用名称用于测试截断效果".into(),
+            body: "正文仍然完整显示".into(),
+            at: chrono::Local::now().timestamp(),
+            source_id: "long.app".into(),
+            id: "long".into(),
+        });
+        let mut popup = Popup::default();
+        popup.open(items, 3, String::new());
+        let rendered = render_sized(&mut popup, true, Vec2::new(340.0, 300.0));
+        let full = "一个非常非常长的通知应用名称用于测试截断效果";
+        assert!(!contains(&rendered.shapes, full), "过长应用名应被截断");
+        assert!(contains(&rendered.shapes, "一个"), "截断后仍保留应用名开头");
+        let window = Rect::from_min_size(Pos2::ZERO, Vec2::new(340.0, 300.0));
+        let mut texts = Vec::new();
+        text_shapes(&rendered.shapes, &mut texts);
+        for text in texts {
+            if text.galley.text().is_empty() || !text.galley.size().x.is_finite() {
+                continue;
+            }
+            assert!(window.expand(8.0).contains_rect(text.visual_bounding_rect()), "文字超出窄面板：{:?}", text.galley.text());
         }
     }
 
