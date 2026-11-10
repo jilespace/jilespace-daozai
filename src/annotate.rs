@@ -169,6 +169,20 @@ pub fn rasterize(base: &Image, shapes: &[Shape]) -> Image {
     out
 }
 
+fn fitted_scale(scale: f32, base: (u32, u32), monitor: Vec2) -> f32 {
+    if base.0 == 0 || base.1 == 0 {
+        return scale;
+    }
+    let max_w = (monitor.x - 16.0).max(320.0);
+    let max_h = (monitor.y - 56.0).max(220.0);
+    let available_w = (max_w - 24.0).max(120.0);
+    let available_h = (max_h - 120.0).max(100.0);
+    let limit = (available_w / base.0 as f32)
+        .min(available_h / base.1 as f32)
+        .min(1.0);
+    scale.min(limit).max(0.05)
+}
+
 fn rect_bounds(image: &Image, area: (f32, f32, f32, f32)) -> Option<(i32, i32, i32, i32)> {
     let left = area.0.floor().max(0.0) as i32;
     let top = area.1.floor().max(0.0) as i32;
@@ -522,6 +536,25 @@ impl Editor {
         self.text_focus = false;
     }
 
+    /// 在小屏/高缩放下把预览比例压到可用画布内，窗口尺寸随显示器收缩。
+    fn fit_to_monitor(&mut self, ctx: &egui::Context) {
+        let Some(base) = self.base.as_ref() else { return };
+        let monitor = ctx
+            .input(|input| input.viewport().monitor_size)
+            .unwrap_or(egui::vec2(1280.0, 800.0));
+        self.scale = fitted_scale(self.scale, (base.width, base.height), monitor);
+    }
+
+    fn window_size_clamped(&self, monitor: Vec2) -> Vec2 {
+        let desired = self.window_size();
+        let max_w = (monitor.x - 16.0).max(320.0);
+        let max_h = (monitor.y - 56.0).max(220.0);
+        Vec2::new(
+            desired.x.min(max_w).max(320.0_f32.min(max_w)),
+            desired.y.min(max_h).max(220.0_f32.min(max_h)),
+        )
+    }
+
     fn window_size(&self) -> Vec2 {
         let (w, h) = self
             .base
@@ -536,7 +569,11 @@ impl Editor {
             return Action::None;
         }
         let viewport_id = egui::ViewportId::from_hash_of("daozai-annotate");
-        let size = self.window_size();
+        self.fit_to_monitor(ctx);
+        let monitor = ctx
+            .input(|input| input.viewport().monitor_size)
+            .unwrap_or(egui::vec2(1280.0, 800.0));
+        let size = self.window_size_clamped(monitor);
         let ppp = ctx.pixels_per_point();
         let position = *self.position.get_or_insert_with(|| {
             #[cfg(windows)]
@@ -1138,6 +1175,38 @@ mod tests {
             }
         }
         Image { width, height, rgba }
+    }
+
+    #[test]
+    fn editor_shrinks_to_fit_small_monitors() {
+        let desired = fitted_scale(1.0, (480, 300), egui::vec2(683.0, 384.0));
+        assert!(desired < 1.0 && desired > 0.1, "小屏应压低预览比例：{desired}");
+        let normal = fitted_scale(1.0, (480, 300), egui::vec2(1920.0, 1080.0));
+        assert_eq!(normal, 1.0);
+        let mut editor = Editor::default();
+        editor.base = Some(gradient(480, 300));
+        editor.scale = 1.0;
+        let clamped = editor.window_size_clamped(egui::vec2(683.0, 384.0));
+        assert!(clamped.x <= 683.0 && clamped.y <= 384.0, "窗口应被显示器限制：{clamped:?}");
+        editor.fit_to_monitor(&{
+            let ctx = egui::Context::default();
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(683.0, 384.0))),
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        native_pixels_per_point: Some(1.0),
+                        monitor_size: Some(egui::vec2(683.0, 384.0)),
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |_| {});
+            ctx
+        });
+        assert!(editor.scale < 1.0);
     }
 
     #[test]

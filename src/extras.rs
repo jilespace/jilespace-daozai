@@ -509,6 +509,18 @@ mod tests {
     }
 
     #[test]
+    fn settings_window_shrinks_on_small_monitors() {
+        let (normal, min) = settings_window_size(egui::vec2(1920.0, 1080.0));
+        assert_eq!(normal, egui::vec2(690.0, 560.0));
+        assert_eq!(min, egui::vec2(600.0, 450.0));
+        let (small, small_min) = settings_window_size(egui::vec2(683.0, 384.0));
+        assert!(small.x <= 655.0 && small.y <= 336.0, "小屏应收缩窗口：{small:?}");
+        assert!(small_min.x <= small.x && small_min.y <= small.y);
+        let (tiny, _) = settings_window_size(egui::vec2(320.0, 240.0));
+        assert!(tiny.x >= 420.0 && tiny.y >= 300.0, "窗口仍需保留最小可用尺寸");
+    }
+
+    #[test]
     fn settings_search_matches_titles_and_keywords() {
         assert_eq!(settings_matches("天气"), vec![14]);
         assert!(settings_matches("城市").contains(&14), "关键词应能定位天气");
@@ -785,6 +797,15 @@ fn setting_choices(ui:&mut egui::Ui,title:&str,value:&mut u32,values:[u32;3],uni
     });
 }
 const SETTINGS_TITLES: [&str; 15] = ["常规", "音乐与歌词", "专注", "饮水", "待办", "置物", "通知", "邮箱", "日程", "关于", "页面管理", "AI 额度", "剪贴板", "岛体外观", "天气"];
+
+/// 设置窗口在窄屏/高缩放下收缩内尺寸，侧栏内容通过滚动保持可用。
+fn settings_window_size(monitor: egui::Vec2) -> (egui::Vec2, egui::Vec2) {
+    let max_width = (monitor.x - 28.0).max(420.0);
+    let max_height = (monitor.y - 48.0).max(300.0);
+    let size = egui::vec2(690.0_f32.min(max_width), 560.0_f32.min(max_height));
+    let min = egui::vec2(600.0_f32.min(size.x), 450.0_f32.min(size.y));
+    (size, min)
+}
 const SETTINGS_KEYWORDS: [&str; 15] = [
     "启动 动画 快捷键 热键 外观 主题",
     "播放器 歌词 音乐 同步",
@@ -1170,7 +1191,9 @@ impl App {
         if !self.settings_open{return;}
         let id=egui::ViewportId::from_hash_of("daozai-settings");
         let focus_requested=std::mem::take(&mut self.settings_focus_requested);
-        ctx.show_viewport_immediate(id,egui::ViewportBuilder::default().with_title("岛仔设置").with_icon(theme::app_icon()).with_inner_size([690.0,560.0]).with_min_inner_size([600.0,450.0]).with_visible(false).with_active(false).with_window_level(egui::WindowLevel::Normal),|ctx,_|{
+        let monitor_size=ctx.input(|i|i.viewport().monitor_size).unwrap_or(egui::vec2(1280.0,800.0));
+        let (window_size,min_size)=settings_window_size(monitor_size);
+        ctx.show_viewport_immediate(id,egui::ViewportBuilder::default().with_title("岛仔设置").with_icon(theme::app_icon()).with_inner_size([window_size.x,window_size.y]).with_min_inner_size([min_size.x,min_size.y]).with_visible(false).with_active(false).with_window_level(egui::WindowLevel::Normal),|ctx,_|{
             let dark=self.settings.settings_theme.dark(crate::settings_theme::system_dark(ctx));
             let original_style=ctx.style();
             let mut style=(*original_style).clone();
@@ -1189,6 +1212,8 @@ impl App {
             if ctx.input(|i|i.viewport().close_requested()){self.settings_open=false;}
             let before=format!("{:?}",self.settings);
             egui::SidePanel::left("settings-sidebar").resizable(false).exact_width(180.0).frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(29,29,32),Color32::from_rgb(237,239,243))).stroke(egui::Stroke::new(1.0_f32,settings_color(ctx,Color32::from_rgb(42,42,45),Color32::from_rgb(216,219,225)))).inner_margin(egui::Margin::symmetric(10,12))).show(ctx,|ui|{
+                egui::ScrollArea::vertical().id_salt("settings-sidebar-scroll").auto_shrink([false,false]).show(ui,|ui|{
+                ui.set_width(ui.available_width());
                 ui.add_space(5.0);
                 ui.label(egui::RichText::new("设置").size(11.0).color(settings_color(ctx,Color32::from_gray(150),Color32::from_gray(105))));
                 ui.add_space(6.0);
@@ -1242,6 +1267,7 @@ impl App {
                     ui.painter().text(egui::pos2(rect.left()+40.0,rect.center().y),egui::Align2::LEFT_CENTER,name,egui::FontId::proportional(13.0),if selected{settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))}else{settings_color(ctx,Color32::from_gray(225),Color32::from_gray(55))});
                     ui.add_space(3.0);
                 }
+                });
             });
             egui::CentralPanel::default().frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(25,25,27),Color32::from_rgb(246,247,249))).inner_margin(egui::Margin::symmetric(22,16))).show(ctx,|ui|{
                 ui.spacing_mut().item_spacing=egui::vec2(8.0,5.0);

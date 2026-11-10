@@ -3817,6 +3817,41 @@ fn remember_pins_setting_is_persisted() {
 }
 
 #[test]
+fn settings_render_on_a_small_viewport_with_scrollable_sidebar() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings_tab=0;
+    h.app.open_settings();
+    h.ctx.set_embed_viewports(false);
+    let output=std::sync::Arc::new(std::sync::Mutex::new(None));
+    let capture=output.clone();
+    egui::Context::set_immediate_viewport_renderer(move|ctx,mut viewport|{
+        let id=viewport.ids.this;
+        let raw=egui::RawInput{viewport_id:id,screen_rect:Some(Rect::from_min_size(Pos2::ZERO,egui::vec2(560.0,400.0))),
+            viewports:std::iter::once((id,egui::ViewportInfo{native_pixels_per_point:Some(1.0),monitor_size:Some(egui::vec2(683.0,384.0)),..Default::default()})).collect(),..Default::default()};
+        *capture.lock().unwrap()=Some(ctx.run(raw,|ctx|(viewport.viewport_ui_cb)(ctx)));
+    });
+    let mut texts=Vec::new();
+    for _ in 0..3 {
+        let _root=h.ctx.run(egui::RawInput::default(),|ctx|h.app.settings_ui(ctx,false));
+        if let Some(child)=output.lock().unwrap().take(){
+            fn collect(shape:&egui::Shape,out:&mut Vec<String>){
+                match shape {
+                    egui::Shape::Text(text)=>out.push(text.galley.text().to_string()),
+                    egui::Shape::Vec(items)=>for item in items{collect(item,out);},
+                    _=>{}
+                }
+            }
+            texts.clear();
+            for clipped in &child.shapes {collect(&clipped.shape,&mut texts);}
+        }
+    }
+    assert!(texts.iter().any(|text|text=="设置"),"小窗口应保留侧栏标题");
+    assert!(texts.iter().any(|text|text.contains("常规")),"小窗口侧栏应仍可显示设置分组");
+    assert!(texts.iter().any(|text|text.contains("另一")||text.contains("外观")||text.contains("常规")),"内容不应崩溃");
+}
+
+#[test]
 fn settings_search_filters_tabs_and_reports_no_match() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();
