@@ -163,6 +163,8 @@ pub struct Settings {
     pub clipboard_days: u32,
     /// 复制文本时自动清理其中链接的跟踪参数。
     pub clipboard_clean_links: bool,
+    /// 退出后保留桌面贴图（内容经 DPAPI 加密保存）。
+    pub remember_pins: bool,
     /// 免打扰时段：只记录通知，不弹横幅与铃铛。
     pub dnd_enabled: bool,
     pub dnd_start: u32,
@@ -180,7 +182,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false,true], page_order: [0,1,2,3,4,5,6,7,8,9,10,11], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, clipboard_clean_links: true, dnd_enabled: false, dnd_start: 23, dnd_end: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false,true], page_order: [0,1,2,3,4,5,6,7,8,9,10,11], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, clipboard_clean_links: true, remember_pins: false, dnd_enabled: false, dnd_start: 23, dnd_end: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
     }
 }
 
@@ -248,6 +250,7 @@ impl Settings {
                     s.clipboard_days = v.parse::<u32>().unwrap_or(7).clamp(1, 30)
                 }
                 "clipboard_clean_links" => s.clipboard_clean_links = v != "0",
+                    "remember_pins" => s.remember_pins = v != "0",
                 "dnd_enabled" => s.dnd_enabled = v != "0",
                 "dnd_start" => s.dnd_start = v.parse::<u32>().unwrap_or(23).min(23),
                 "dnd_end" => s.dnd_end = v.parse::<u32>().unwrap_or(7).min(23),
@@ -306,6 +309,7 @@ impl Settings {
                 ("clipboard_limit".into(), self.clipboard_limit.to_string()),
                 ("clipboard_days".into(), self.clipboard_days.to_string()),
                 ("clipboard_clean_links".into(), (self.clipboard_clean_links as u8).to_string()),
+            ("remember_pins".into(), (self.remember_pins as u8).to_string()),
                 ("dnd_enabled".into(), (self.dnd_enabled as u8).to_string()),
                 ("dnd_start".into(), self.dnd_start.to_string()),
                 ("dnd_end".into(), self.dnd_end.to_string()),

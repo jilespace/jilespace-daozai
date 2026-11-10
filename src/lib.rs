@@ -53,6 +53,7 @@ pub mod theme;
 pub mod settings_theme;
 mod panel;
 pub mod pin;
+pub mod pin_store;
 mod updates;
 pub mod weather;
 pub mod world_clock;

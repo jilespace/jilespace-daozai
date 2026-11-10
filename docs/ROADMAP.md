@@ -32,7 +32,7 @@
 | 通知历史 | `Ctrl+Alt+N` 面板：通知镜像、搜索、未读筛选、复制/静音/删除/清空，本机持久化 | `notifications.rs`、`notifications_ui.rs`、`native.rs` |
 | 防睡眠 | 设置与命令面板一键阻止系统休眠/息屏 | `system.rs`、`model.rs` |
 | 滚动截图 | `Ctrl+Alt+Shift+L` 框选后自动/手动滚动，按重叠行拼接成长图（≤8000px、≤1600 万像素） | `scroll_capture.rs`、`region_capture.rs` |
-| 截图标注 | `Ctrl+Alt+Shift+S` 框选后进入编辑器；六种标注工具、撤销、复制/保存/贴图 | `annotate.rs`、`screenshot.rs`、`capture_ui.rs` |
+| 截图标注 | `Ctrl+Alt+Shift+S` 框选后进入编辑器；六种标注工具、撤销、复制/保存/贴图；贴图可选加密持久化 | `annotate.rs`、`screenshot.rs`、`capture_ui.rs` |
 | 图片取字 | `Ctrl+Alt+O` 识别剪贴板图片；`Ctrl+Alt+Shift+O` 框选屏幕取字，本地 OCR 并写入历史 | `ocr.rs`、`region_capture.rs`、`capture_ui.rs`、`main.rs` |
 | 系统提示 | 电源/电量、网络、音量、大写锁定、输入语言、蓝牙设备 | `system.rs`、`bt.rs`、`app.rs` |
 | 外观 | 设置页浅色/深色/跟随系统（岛体保持黑色）、页面显隐与排序、常驻组件排序 | `settings_theme.rs`、`extras.rs` |
@@ -168,6 +168,7 @@ Notchy（macOS 13+，闭源，一次性 $24.99，v2.0.6）把 macOS 刘海变成
 27. **Phase AA（已完成）剪贴板链接清理增强**：正文内嵌多链接清理、标点与括号保留。
 28. **Phase AB（已完成）进程页排序切换**：表头切换 CPU/内存排序、对应条形与自绘箭头。
 29. **Phase AC（已完成）设置搜索**：侧栏关键词过滤、自动跳转、空结果提示；日历用例去除偶发失败。
+30. **Phase AD（已完成）贴图持久化**：设置开启后 DPAPI 加密保存贴图，重启恢复位置/缩放/透明度。
 
 ## 五、UI 规范草案（新面板统一遵守）
 

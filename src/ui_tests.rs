@@ -3769,6 +3769,19 @@ fn page_order_drag_applies_on_release_and_saves() {
 }
 
 #[test]
+fn remember_pins_setting_is_persisted() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    assert!(!h.app.settings.remember_pins,"默认不保存贴图");
+    h.app.settings.remember_pins=true;
+    h.app.settings.save();
+    assert!(crate::model::Settings::load().remember_pins);
+    h.app.settings.remember_pins=false;
+    h.app.settings.save();
+    assert!(!crate::model::Settings::load().remember_pins);
+}
+
+#[test]
 fn settings_search_filters_tabs_and_reports_no_match() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();

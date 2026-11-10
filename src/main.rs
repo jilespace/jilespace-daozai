@@ -78,6 +78,8 @@ struct Shell {
     scroll_capture: Option<daozai::scroll_capture::Capture>,
     /// 贴在桌面上的截图（置顶小窗）。
     pins: Vec<daozai::pin::Pin>,
+    pins_restored: bool,
+    pins_persist_last: bool,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -134,6 +136,7 @@ impl Shell {
         }
         let stay_awake = app.settings.stay_awake;
         let audio_visualizer = app.settings.audio_visualizer;
+        let remember_pins = app.settings.remember_pins;
         let clipboard = daozai::clipboard::Service::start();
         clipboard.set_enabled(clipboard_enabled);
         clipboard.set_limits(clipboard_limit, clipboard_days);
@@ -190,6 +193,8 @@ impl Shell {
             annotate: Default::default(),
             scroll_capture: None,
             pins: Vec::new(),
+            pins_restored: false,
+            pins_persist_last: remember_pins,
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -643,11 +648,104 @@ impl Shell {
     }
 
     fn show_pins(&mut self, ctx: &egui::Context) {
+        if !self.pins_restored {
+            self.pins_restored = true;
+            if self.app.settings.remember_pins {
+                self.restore_pins(ctx);
+            }
+        }
         if self.pins.is_empty() {
             return;
         }
         let dark = daozai::settings_theme::system_dark(ctx);
-        self.pins.retain_mut(|pin| !pin.show(ctx, dark));
+        let mut removed = false;
+        self.pins.retain_mut(|pin| {
+            let closed = pin.show(ctx, dark);
+            if closed {
+                if let Some(key) = pin.persist_key() {
+                    daozai::pin_store::remove_image(&daozai::pin_store::dir(), key);
+                }
+                removed = true;
+            }
+            !closed
+        });
+        if removed {
+            self.save_pin_metadata();
+        }
+    }
+
+    fn add_pin(&mut self, ctx: &egui::Context, image: daozai::ocr::Image) {
+        if self.pins.len() >= 6 {
+            self.app.say("最多同时贴 6 张图，先右键关闭一些吧");
+            return;
+        }
+        let ppp = ctx.pixels_per_point();
+        let key = if self.app.settings.remember_pins {
+            let key = daozai::pin_store::new_key();
+            match daozai::pin_store::save_image(&daozai::pin_store::dir(), &key, &image) {
+                Ok(()) => Some(key),
+                Err(error) => {
+                    self.app.say(format!("无法保存贴图：{error}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut pin = daozai::pin::Pin::new(image, ppp);
+        if let Some(key) = key {
+            pin.set_persist_key(key);
+        }
+        pin.place_near_cursor(ppp);
+        self.pins.push(pin);
+        self.save_pin_metadata();
+        self.app.say("已贴到桌面，右键或双击关闭");
+    }
+
+    fn restore_pins(&mut self, ctx: &egui::Context) {
+        let ppp = ctx.pixels_per_point();
+        let root = daozai::pin_store::dir();
+        for record in daozai::pin_store::load_records() {
+            if self.pins.len() >= 6 {
+                break;
+            }
+            let Some(image) = daozai::pin_store::load_image(&root, &record.key) else {
+                daozai::pin_store::remove_image(&root, &record.key);
+                continue;
+            };
+            self.pins.push(daozai::pin::Pin::restore(
+                image,
+                ppp,
+                egui::pos2(record.x, record.y),
+                record.zoom,
+                record.opacity,
+                record.key,
+            ));
+        }
+        if !self.pins.is_empty() {
+            self.app.say(format!("已恢复 {} 张贴图", self.pins.len()));
+        }
+    }
+
+    fn save_pin_metadata(&mut self) {
+        if !self.app.settings.remember_pins {
+            return;
+        }
+        let records: Vec<_> = self
+            .pins
+            .iter()
+            .filter_map(|pin| pin.metadata())
+            .collect();
+        if let Err(error) = daozai::pin_store::save_records(&records) {
+            self.app.say(error);
+        }
+    }
+
+    fn clear_pin_storage(&mut self) {
+        for pin in &mut self.pins {
+            pin.clear_persist_key();
+        }
+        daozai::pin_store::clear();
     }
 
     fn show_annotate(&mut self, ctx: &egui::Context) {
@@ -674,12 +772,7 @@ impl Shell {
             }
             AnnotateAction::Pin(image) => {
                 self.annotate.close();
-                if self.pins.len() >= 6 {
-                    self.app.say("最多同时贴 6 张图，先右键关闭一些吧");
-                } else {
-                    self.pins.push(daozai::pin::Pin::new(image, ctx.pixels_per_point()));
-                    self.app.say("已贴到桌面，右键或双击关闭");
-                }
+                self.add_pin(ctx, image);
             }
         }
     }
@@ -887,7 +980,14 @@ impl Shell {
             PaletteAction::ClosePins => {
                 self.close_command_palette();
                 let count = self.pins.len();
+                let root = daozai::pin_store::dir();
+                for pin in &self.pins {
+                    if let Some(key) = pin.persist_key() {
+                        daozai::pin_store::remove_image(&root, key);
+                    }
+                }
                 self.pins.clear();
+                self.save_pin_metadata();
                 self.app.say(format!("已关闭 {count} 张贴图"));
             }
             PaletteAction::SetStayAwake(awake) => {
@@ -1093,6 +1193,13 @@ impl eframe::App for Shell {
                     daozai::audio::Event::Unavailable(message) => self.app.say(format!("音频可视化不可用：{message}")),
                 }
             }
+        }
+        let remember_pins = self.app.settings.remember_pins;
+        if remember_pins != self.pins_persist_last {
+            if !remember_pins {
+                self.clear_pin_storage();
+            }
+            self.pins_persist_last = remember_pins;
         }
         let want_processes = self.app.process_page_active();
         if want_processes && self.processes.is_none() {
@@ -1330,4 +1437,16 @@ fn run() -> eframe::Result<()> {
         .with_visible(false);
     let opts = eframe::NativeOptions { viewport, vsync: !cfg!(windows), ..Default::default() };
     eframe::run_native("岛仔", opts, Box::new(|cc| Ok(Box::new(Shell::new(cc)))))
+}
+impl Drop for Shell {
+    fn drop(&mut self) {
+        if self.app.settings.remember_pins {
+            let records: Vec<_> = self
+                .pins
+                .iter()
+                .filter_map(|pin| pin.metadata())
+                .collect();
+            let _ = daozai::pin_store::save_records(&records);
+        }
+    }
 }

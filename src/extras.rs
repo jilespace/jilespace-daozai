@@ -1389,6 +1389,10 @@ impl App {
                             ui.add_space(3.0);
                             ui.label(egui::RichText::new("关闭岛仔或重新打开本开关后恢复系统原来的睡眠策略。").size(11.0).color(settings_color(ctx,Color32::from_gray(175),Color32::from_gray(95))));
                         });
+                        settings_label(ui,"贴图");
+                        settings_card(ui,|ui|{
+                            setting_row(ui,"退出后保留贴图","内容经 DPAPI 加密保存在本机，下次启动恢复位置、缩放与透明度（最多 6 张）",&mut self.settings.remember_pins);
+                        });
                         settings_label(ui,"全局快捷键");
                         settings_card(ui,|ui|{
                             for (name, description, keys) in [

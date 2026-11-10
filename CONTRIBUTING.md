@@ -43,6 +43,7 @@ cargo run --locked --bin daozai
 | `src/scroll_capture.rs` | 滚动截图：重叠拼接、采集循环与 HUD |
 | `src/annotate.rs` | 截图标注编辑器、文字/形状/马赛克合成与导出 |
 | `src/pin.rs` | 桌面贴图窗口（置顶、拖动、关闭） |
+| `src/pin_store.rs` | 贴图加密持久化（元数据 + DPAPI 图片） |
 | `src/native.rs`、`src/system.rs` | 原生窗口、输入、拖放和系统事件 |
 | `src/ui_tests.rs` | 无窗口交互与布局回归测试 |
 | `src/bin/daozai-record` | 合成数据演示与软件渲染器 |

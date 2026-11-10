@@ -33,6 +33,8 @@ pub struct Pin {
     position: Option<Pos2>,
     viewport: egui::ViewportId,
     shown: bool,
+    /// 持久化文件名（不含扩展名）；为空表示不保存。
+    persist_key: Option<String>,
 }
 
 pub const MIN_ZOOM: f32 = 0.4;
@@ -51,7 +53,67 @@ impl Pin {
             position: None,
             viewport: egui::ViewportId::from_hash_of(("daozai-pin", serial)),
             shown: false,
+            persist_key: None,
         }
+    }
+
+    /// 从持久化记录恢复一张贴图。
+    pub fn restore(
+        image: Image,
+        pixels_per_point: f32,
+        position: Pos2,
+        zoom: f32,
+        opacity: f32,
+        key: String,
+    ) -> Self {
+        let mut pin = Self::new(image, pixels_per_point);
+        pin.position = Some(position);
+        pin.set_zoom(zoom);
+        pin.set_opacity(opacity);
+        pin.persist_key = Some(key);
+        pin
+    }
+
+    pub fn set_persist_key(&mut self, key: String) {
+        self.persist_key = Some(key);
+    }
+
+    pub fn persist_key(&self) -> Option<&str> {
+        self.persist_key.as_deref()
+    }
+
+    pub fn clear_persist_key(&mut self) {
+        self.persist_key = None;
+    }
+
+    /// 尚未定位时放到鼠标附近，保证首帧保存元数据也有坐标。
+    pub fn place_near_cursor(&mut self, pixels_per_point: f32) {
+        if self.position.is_some() {
+            return;
+        }
+        let size = self.display_size();
+        #[cfg(windows)]
+        {
+            self.position = crate::native::clipboard_popup_position(size.x, size.y, pixels_per_point)
+                .map(|(x, y)| egui::pos2(x, y))
+                .or(Some(egui::pos2(120.0, 80.0)));
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (size, pixels_per_point);
+            self.position = Some(egui::pos2(120.0, 80.0));
+        }
+    }
+
+    pub fn metadata(&self) -> Option<crate::pin_store::StoredPin> {
+        let position = self.position?;
+        Some(crate::pin_store::StoredPin {
+            key: self.persist_key.clone()?,
+            x: position.x,
+            y: position.y,
+            zoom: self.zoom,
+            opacity: self.opacity,
+        })
     }
 
     pub fn display_size(&self) -> Vec2 {
@@ -117,6 +179,10 @@ impl Pin {
             }
             if self.paint(ctx, dark) {
                 closed = true;
+            }
+            // 系统拖动后同步窗口位置，退出时写入持久化元数据。
+            if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {
+                self.position = Some(rect.min);
             }
         });
         closed
@@ -259,6 +325,26 @@ mod tests {
         });
         assert!(pin.image.is_none(), "上传纹理后应释放全分辨率原图");
         assert!(pin.texture.is_some());
+    }
+
+    #[test]
+    fn persisted_pins_expose_metadata_and_restore_geometry() {
+        let ctx = egui::Context::default();
+        let mut pin = Pin::new(gradient(120, 80), 2.0);
+        pin.place_near_cursor(2.0);
+        assert!(pin.metadata().is_none(), "未设置持久化 key 时不写元数据");
+        pin.set_persist_key("pin-test".into());
+        let record = pin.metadata().expect("定位后应可生成元数据");
+        assert_eq!(record.key, "pin-test");
+        pin.set_zoom(1.5);
+        pin.set_opacity(0.6);
+        let restored = Pin::restore(gradient(120, 80), 2.0, egui::pos2(record.x, record.y), 1.5, 0.6, "pin-test".into());
+        assert_eq!(restored.persist_key(), Some("pin-test"));
+        assert!((restored.zoom() - 1.5).abs() < 1e-6);
+        assert!((restored.opacity() - 0.6).abs() < 1e-6);
+        let meta = restored.metadata().expect("恢复的贴图应带元数据");
+        assert!((meta.zoom - 1.5).abs() < 1e-6);
+        let _ = ctx;
     }
 
     #[test]
