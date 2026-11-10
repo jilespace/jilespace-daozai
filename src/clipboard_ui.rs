@@ -54,6 +54,7 @@ enum ItemKind {
     Link,
     Code,
     MultiLine,
+    Image,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,8 @@ pub struct Popup {
     tab: Tab,
     preview_open: bool,
     preview_reset_scroll: bool,
+    /// 预览图片的懒加载纹理（key 与 TextureHandle）。
+    preview_texture: Option<(String, egui::TextureHandle)>,
     undo: Option<Undo>,
     confirm_clear: bool,
     error: Option<String>,
@@ -100,6 +103,7 @@ impl Default for Popup {
     fn default() -> Self {
         Self {
             open: false,
+            preview_texture: None,
             query: String::new(),
             selected: 0,
             selected_id: None,
@@ -905,7 +909,7 @@ impl Popup {
             self.preview_open = false;
             return Action::None;
         };
-        let kind = item_kind(&item.text);
+        let kind = if item.is_image() { ItemKind::Image } else { item_kind(&item.text) };
         ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
             ui.set_width(rect.width());
             egui::Frame::new()
@@ -942,31 +946,84 @@ impl Popup {
                     );
                     ui.add_space(10.0);
                     let height = ui.available_height().max(40.0);
-                    let text = if item.text.chars().count() > MAX_PREVIEW_CHARS {
-                        let mut text: String = item.text.chars().take(MAX_PREVIEW_CHARS).collect();
-                        text.push_str("\n…");
-                        text
+                    if let Some(image_ref) = item.image.as_ref() {
+                        let key = item.id.clone();
+                        if self
+                            .preview_texture
+                            .as_ref()
+                            .map(|(cached, _)| cached != &key)
+                            .unwrap_or(true)
+                        {
+                            self.preview_texture = None;
+                            if let Some(image) = crate::clipboard::load_image(image_ref) {
+                                let display = crate::annotate::display_image(&image);
+                                let pixels = egui::ColorImage::from_rgba_unmultiplied(
+                                    [display.width as usize, display.height as usize],
+                                    &display.rgba,
+                                );
+                                let texture = ui.ctx().load_texture(
+                                    format!("clipboard-image-{key}"),
+                                    pixels,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                self.preview_texture = Some((key, texture));
+                            }
+                        }
+                        ui.vertical_centered(|ui| {
+                            if let Some((_, texture)) = &self.preview_texture {
+                                let available = Vec2::new(width, (height - 26.0).max(60.0));
+                                let size = texture.size_vec2();
+                                let scale = (available.x / size.x)
+                                    .min(available.y / size.y)
+                                    .min(1.0)
+                                    .max(0.02);
+                                ui.add(
+                                    egui::Image::new(texture)
+                                        .fit_to_exact_size(size * scale)
+                                        .corner_radius(8.0),
+                                );
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new("粘贴时写入原图；图片经 DPAPI 加密保存在本机")
+                                        .font(theme::font(10.5, W::Regular))
+                                        .color(p.faint),
+                                );
+                            } else {
+                                ui.add_space((height * 0.3).min(80.0));
+                                ui.label(
+                                    RichText::new("图片读取失败，可能已被清理")
+                                        .font(theme::font(12.0, W::Regular))
+                                        .color(p.muted),
+                                );
+                            }
+                        });
                     } else {
-                        item.text.clone()
-                    };
-                    let mut area = egui::ScrollArea::vertical()
-                        .id_salt("clipboard-preview")
-                        .auto_shrink([false, false])
-                        .max_height(height);
-                    if std::mem::take(&mut self.preview_reset_scroll) {
-                        area = area.vertical_scroll_offset(0.0);
-                    }
-                    area.show(ui, |ui| {
-                        let font = match kind {
-                            ItemKind::Code | ItemKind::Link => FontId::monospace(12.0),
-                            _ => theme::font(12.5, W::Regular),
+                        let text = if item.text.chars().count() > MAX_PREVIEW_CHARS {
+                            let mut text: String = item.text.chars().take(MAX_PREVIEW_CHARS).collect();
+                            text.push_str("\n…");
+                            text
+                        } else {
+                            item.text.clone()
                         };
-                        ui.add(
-                            egui::Label::new(RichText::new(text).font(font).color(p.text))
-                                .selectable(true)
-                                .wrap(),
-                        );
-                    });
+                        let mut area = egui::ScrollArea::vertical()
+                            .id_salt("clipboard-preview")
+                            .auto_shrink([false, false])
+                            .max_height(height);
+                        if std::mem::take(&mut self.preview_reset_scroll) {
+                            area = area.vertical_scroll_offset(0.0);
+                        }
+                        area.show(ui, |ui| {
+                            let font = match kind {
+                                ItemKind::Code | ItemKind::Link => FontId::monospace(12.0),
+                                _ => theme::font(12.5, W::Regular),
+                            };
+                            ui.add(
+                                egui::Label::new(RichText::new(text).font(font).color(p.text))
+                                    .selectable(true)
+                                    .wrap(),
+                            );
+                        });
+                    }
                 });
         });
         Action::None
@@ -1145,7 +1202,7 @@ fn row(
     } else if hover > 0.01 {
         painter.rect_filled(body, radius, mix(p.surface, p.hover, hover));
     }
-    let kind = item_kind(&item.text);
+    let kind = if item.is_image() { ItemKind::Image } else { item_kind(&item.text) };
     let icon_rect = Rect::from_min_size(
         Pos2::new(rect.left() + 10.0, rect.center().y - 17.0),
         Vec2::splat(34.0),
@@ -1265,10 +1322,19 @@ fn kind_label(kind: ItemKind) -> &'static str {
         ItemKind::Link => "链接",
         ItemKind::Code => "代码",
         ItemKind::MultiLine => "多行文本",
+        ItemKind::Image => "图片",
     }
 }
 
 fn meta_line(item: &Item, kind: ItemKind, now: i64) -> String {
+    if let Some(image) = item.image.as_ref() {
+        return format!(
+            "图片 · {}×{} · {}",
+            image.width,
+            image.height,
+            relative_time(now, item.copied_at)
+        );
+    }
     let mut parts = vec![kind_label(kind).to_string()];
     let lines = item.text.lines().count();
     if lines > 1 {
@@ -1280,6 +1346,15 @@ fn meta_line(item: &Item, kind: ItemKind, now: i64) -> String {
 }
 
 fn meta_label(item: &Item, label: &str) -> String {
+    if let Some(image) = item.image.as_ref() {
+        return format!(
+            "{} · {}×{} · {}",
+            label,
+            image.width,
+            image.height,
+            relative_time(chrono::Local::now().timestamp(), item.copied_at)
+        );
+    }
     let mut parts = vec![label.to_string()];
     let lines = item.text.lines().count();
     if lines > 1 {
@@ -1404,6 +1479,19 @@ fn draw_kind_icon(painter: &egui::Painter, rect: Rect, kind: ItemKind, color: Co
             painter.line_segment([center + Vec2::new(3.0, -5.0), center + Vec2::new(7.0, 0.0)], Stroke::new(1.4_f32, color));
             painter.line_segment([center + Vec2::new(7.0, 0.0), center + Vec2::new(3.0, 5.0)], Stroke::new(1.4_f32, color));
             painter.line_segment([center + Vec2::new(1.5, -6.0), center + Vec2::new(-1.5, 6.0)], Stroke::new(1.4_f32, color));
+        }
+        ItemKind::Image => {
+            let frame = Rect::from_center_size(center, Vec2::new(15.0, 12.0));
+            painter.rect_stroke(frame, 2.0, Stroke::new(1.4_f32, color), StrokeKind::Inside);
+            painter.circle_filled(center + Vec2::new(4.0, -3.0), 1.6, color);
+            painter.line_segment(
+                [center + Vec2::new(-6.0, 4.0), center + Vec2::new(-1.0, -1.0)],
+                Stroke::new(1.3_f32, color),
+            );
+            painter.line_segment(
+                [center + Vec2::new(-1.0, -1.0), center + Vec2::new(3.0, 3.0)],
+                Stroke::new(1.3_f32, color),
+            );
         }
         ItemKind::MultiLine => {
             for (offset, length) in [(-5.0f32, 14.0f32), (0.0, 17.0), (5.0, 10.0)] {
@@ -1830,6 +1918,87 @@ mod tests {
             write_png(&light, &dest.join("clipboard-light.png"));
             write_png(&view, &dest.join("clipboard-preview.png"));
         }
+    }
+
+    #[test]
+    fn image_items_render_metadata_and_preview_fallback() {
+        let now = chrono::Local::now().timestamp();
+        let image_item = Item {
+            id: "img-demo".into(),
+            text: "图片 300×200".into(),
+            copied_at: now,
+            pinned: false,
+            image: Some(crate::clipboard::ImageRef {
+                key: "missing-image".into(),
+                width: 300,
+                height: 200,
+            }),
+        };
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_items(vec![image_item.clone()]);
+        let list = render_popup(&mut popup, true, "");
+        assert!(contains_text(&list.shapes, "图片 · 300×200"), "列表应显示图片尺寸");
+        popup.selected_id = Some(image_item.id.clone());
+        popup.sync_selection();
+        popup.preview_open = true;
+        let preview = render_popup(&mut popup, true, "");
+        assert!(contains_text(&preview.shapes, "预览"));
+        assert!(contains_text(&preview.shapes, "图片读取失败"), "文件缺失时应给出预览兜底");
+    }
+
+    /// 开发用：生成真实图片条目的预览截图。
+    #[test]
+    #[ignore]
+    fn image_preview_preview_render() {
+        let dir = std::env::temp_dir().join(format!(
+            "daozai-clipboard-image-preview-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("DAOZAI_DATA_DIR", &dir);
+        let image = crate::ocr::Image {
+            width: 320,
+            height: 200,
+            rgba: (0..320 * 200 * 4)
+                .map(|index| match index % 4 {
+                    0 => ((index / 4) % 255) as u8,
+                    1 => (((index / 4) / 2) % 255) as u8,
+                    2 => 220,
+                    _ => 255,
+                })
+                .collect(),
+        };
+        let image_ref = crate::clipboard::store_image(&image).unwrap();
+        let item = Item {
+            id: image_ref.key.clone(),
+            text: format!("图片 {}×{}", image_ref.width, image_ref.height),
+            copied_at: chrono::Local::now().timestamp(),
+            pinned: false,
+            image: Some(image_ref),
+        };
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_items(vec![item.clone()]);
+        popup.selected_id = Some(item.id.clone());
+        popup.preview_open = true;
+        let rendered = render_popup(&mut popup, true, "");
+        assert!(contains_text(&rendered.shapes, "预览"));
+        if let Some(dest) = std::env::var_os("DAOZAI_CLIPBOARD_IMAGE_PREVIEW").filter(|value| !value.is_empty()) {
+            let dest = std::path::PathBuf::from(dest);
+            std::fs::create_dir_all(&dest).unwrap();
+            write_png(&rendered, &dest.join("clipboard-image-preview.png"));
+            let mut list = Popup::default();
+            list.open_state(true, false, None);
+            list.set_items(vec![item]);
+            let list = render_popup(&mut list, true, "");
+            write_png(&list, &dest.join("clipboard-image-list.png"));
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
