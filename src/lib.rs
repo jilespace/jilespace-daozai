@@ -28,6 +28,7 @@ mod calendar_editor;
 pub mod glass;
 pub mod icons;
 pub mod input;
+mod clipboard_hotkey;
 pub mod lyrics;
 pub mod mail;
 pub mod media_hud;

@@ -4,7 +4,7 @@
 //! 圆角与柔和阴影；所有交互状态（未开启、暂停、空列表、无匹配、写入失败、
 //! 删除撤销）都在同一块面板里给足反馈，不把错误丢到岛体上。
 use crate::clipboard::Item;
-use crate::panel::{self, chip_button, draw_search_icon, hint, icon_button, keycap, link_button, mix, section_label, with_alpha, Palette};
+use crate::panel::{self, chip_button, hint, icon_button, keycap, link_button, mix, section_label, with_alpha, Palette};
 use crate::theme::{self, W};
 use eframe::egui::{
     self, Align, Color32, FontId, Key, Layout, Modifiers, Pos2, Rect, RichText, Sense, Stroke,
@@ -77,10 +77,11 @@ pub struct Popup {
     pub query: String,
     pub selected: usize,
     selected_id: Option<String>,
-    pub items: Vec<Item>,
+    pub items: std::sync::Arc<Vec<Item>>,
     pub enabled: bool,
     pub paused: bool,
     pub hotkey_error: Option<String>,
+    win_v_active: bool,
     target_label: String,
     tab: Tab,
     preview_open: bool,
@@ -90,11 +91,13 @@ pub struct Popup {
     /// 列表图片缩略图纹理。
     thumbnails: std::collections::HashMap<String, egui::TextureHandle>,
     thumb_rx: Option<std::sync::mpsc::Receiver<(String, egui::ColorImage)>>,
+    thumb_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     thumb_sig: Vec<(String, u32, u32)>,
     undo: Option<Undo>,
     confirm_clear: bool,
     error: Option<String>,
     position: Option<egui::Pos2>,
+    window_pinned: bool,
     request_focus: bool,
     search_focused: bool,
     scroll_to_selected: bool,
@@ -112,14 +115,16 @@ impl Default for Popup {
             preview_texture: None,
             thumbnails: std::collections::HashMap::new(),
             thumb_rx: None,
+            thumb_cancel: None,
             thumb_sig: Vec::new(),
             query: String::new(),
             selected: 0,
             selected_id: None,
-            items: Vec::new(),
+            items: Default::default(),
             enabled: false,
             paused: false,
             hotkey_error: None,
+            win_v_active: false,
             target_label: "当前应用".into(),
             tab: Tab::Recent,
             preview_open: false,
@@ -128,6 +133,7 @@ impl Default for Popup {
             confirm_clear: false,
             error: None,
             position: None,
+            window_pinned: false,
             request_focus: false,
             search_focused: false,
             scroll_to_selected: false,
@@ -156,6 +162,7 @@ impl Popup {
         self.confirm_clear = false;
         self.error = None;
         self.position = None;
+        self.window_pinned = false;
         self.request_focus = true;
         self.search_focused = false;
         self.scroll_to_selected = true;
@@ -164,6 +171,7 @@ impl Popup {
         self.had_focus = false;
         self.focus_lost_at = None;
         self.fade = 0.0;
+        self.refresh_thumbnails();
     }
 
     pub fn close(&mut self) {
@@ -171,9 +179,25 @@ impl Popup {
         self.shown = false;
         self.shown_at = None;
         self.position = None;
+        self.window_pinned = false;
         self.preview_open = false;
         self.confirm_clear = false;
         self.undo = None;
+        self.release_images();
+    }
+
+    fn cancel_thumbnail_work(&mut self) {
+        if let Some(cancel) = self.thumb_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.thumb_rx = None;
+    }
+
+    fn release_images(&mut self) {
+        self.cancel_thumbnail_work();
+        self.preview_texture = None;
+        self.thumbnails.clear();
+        self.thumb_sig.clear();
     }
 
     pub fn sync(&mut self, enabled: bool, paused: bool, hotkey_error: Option<String>) {
@@ -188,6 +212,8 @@ impl Popup {
             .unwrap_or_else(|| "当前应用".into());
     }
 
+    pub fn set_win_v_active(&mut self, active: bool) { self.win_v_active = active; }
+
     /// 写入剪贴板失败等面板内错误：显示在搜索框下方，不自动消失。
     pub fn set_error(&mut self, message: impl Into<String>) {
         let message = message.into();
@@ -201,6 +227,12 @@ impl Popup {
     }
 
     pub fn set_items(&mut self, items: Vec<Item>) {
+        self.set_shared_items(std::sync::Arc::new(items));
+    }
+
+    /// Share the service's immutable snapshot with the shell instead of keeping
+    /// another full copy of up to hundreds of clipboard strings.
+    pub fn set_shared_items(&mut self, items: std::sync::Arc<Vec<Item>>) {
         let keep_id = self.selected_id.clone();
         self.items = items;
         self.selected_id = keep_id.filter(|id| self.items.iter().any(|item| &item.id == id));
@@ -213,6 +245,11 @@ impl Popup {
 
     /// 重新生成图片条目缩略图（后台线程解密/解码，不阻塞面板）。
     fn refresh_thumbnails(&mut self) {
+        // History keeps updating while hidden; defer image IO and decoding until
+        // the popup is actually opened. Close also cancels queued image work.
+        if !self.open {
+            return;
+        }
         let keys: Vec<(String, crate::clipboard::ImageRef)> = self
             .items
             .iter()
@@ -226,21 +263,31 @@ impl Popup {
         if sig == self.thumb_sig {
             return;
         }
+        self.cancel_thumbnail_work();
         self.thumb_sig = sig;
-        self.thumbnails.clear();
+        self.thumbnails.retain(|id, _| keys.iter().any(|(key, _)| key == id));
+        let keys: Vec<_> = keys.into_iter().filter(|(key, _)| !self.thumbnails.contains_key(key)).collect();
         if keys.is_empty() {
-            self.thumb_rx = None;
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
+        // Bound queued pixels, especially if the UI is busy or the window closes.
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.thumb_cancel = Some(cancel.clone());
         self.thumb_rx = Some(rx);
         std::thread::Builder::new()
             .name("daozai-clipboard-thumbs".into())
             .spawn(move || {
                 for (key, image_ref) in keys {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     let Some(image) = crate::clipboard::load_image(&image_ref) else {
                         continue;
                     };
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     let thumb = crate::clipboard::thumbnail(&image, 72);
                     let color = egui::ColorImage::from_rgba_unmultiplied(
                         [thumb.width as usize, thumb.height as usize],
@@ -280,6 +327,7 @@ impl Popup {
         }
         if disconnected {
             self.thumb_rx = None;
+            self.thumb_cancel = None;
         }
     }
     pub fn filtered(&self) -> Vec<usize> {
@@ -343,6 +391,11 @@ impl Popup {
     }
 
     pub fn observe_focus(&mut self, focused: bool, now: Instant) -> bool {
+        if self.window_pinned {
+            self.focus_lost_at = None;
+            self.had_focus |= focused;
+            return false;
+        }
         if focused {
             self.had_focus = true;
             self.focus_lost_at = None;
@@ -353,6 +406,10 @@ impl Popup {
         }
         let lost = *self.focus_lost_at.get_or_insert(now);
         now.duration_since(lost) >= Duration::from_millis(100)
+    }
+
+    pub fn is_window_pinned(&self) -> bool {
+        self.open && self.window_pinned
     }
 
     fn stage_delete(&mut self, item: &Item) -> Action {
@@ -428,6 +485,11 @@ impl Popup {
             let panel_action = self.panel_ui(ctx, dark);
             if action == Action::None {
                 action = panel_action;
+            }
+            // Keep the native drag result; rebuilding the viewport must not
+            // restore its original position or follow the mouse afterwards.
+            if let Some(rect) = ctx.input(|input| input.viewport().outer_rect) {
+                self.position = Some(rect.min);
             }
         });
         if matches!(action, Action::Paste(_) | Action::CopyOnly(_) | Action::Restore(_)) {
@@ -562,6 +624,9 @@ impl Popup {
     /// ↑↓ 选择、Enter 粘贴、Ctrl+Enter 仅复制、Esc 关闭；要在输入框之前消费，
     /// 否则搜索框会把方向键和回车先吃掉。
     fn consume_navigation(&mut self, ctx: &egui::Context) -> Action {
+        if ctx.memory(|memory| memory.any_popup_open()) {
+            return Action::None;
+        }
         let (up, down, enter, ctrl_enter, escape) = ctx.input_mut(|input| {
             (
                 input.consume_key(Modifiers::NONE, Key::ArrowUp),
@@ -577,9 +642,16 @@ impl Popup {
                 self.confirm_clear = false;
             } else if self.preview_open {
                 self.preview_open = false;
+            } else if !self.query.is_empty() {
+                self.query.clear();
+                self.selected = 0;
+                self.selected_id = None;
+                self.sync_selection();
+                self.request_focus = true;
             } else {
                 action = Action::Close { restore: true };
             }
+            return action;
         }
         if up {
             self.move_selection(-1);
@@ -609,16 +681,22 @@ impl Popup {
         let mut action = Action::None;
         let paused = self.paused;
         let mut confirm_clear = false;
-        ui.horizontal(|ui| {
+        let mut drag_right = ui.max_rect().right();
+        let header = ui.horizontal(|ui| {
             let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(23.0), Sense::hover());
             draw_clipboard_icon(ui, icon_rect, p.accent);
             ui.add_space(2.0);
             ui.label(RichText::new("剪贴板").font(theme::font(16.0, W::Semibold)).color(p.text));
             ui.add_space(6.0);
-            keycap(ui, "Ctrl+Alt+V", p);
+            keycap(ui, if self.win_v_active { "Win+V" } else { crate::clipboard::HOTKEY_TEXT }, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, "×", p.muted, p.text, p.hover, 16.0) {
+                if icon_button(ui, "×", "关闭窗口", p.muted, p.text, p.hover, 16.0) {
                     action = Action::Close { restore: true };
+                }
+                ui.add_space(2.0);
+                if window_pin_button(ui, self.window_pinned, p) {
+                    self.window_pinned = !self.window_pinned;
+                    self.focus_lost_at = None;
                 }
                 ui.add_space(2.0);
                 ui.menu_button(
@@ -656,8 +734,21 @@ impl Popup {
                         }
                     },
                 );
+                drag_right = ui.cursor().right();
             });
         });
+        let drag_rect = Rect::from_min_max(header.response.rect.min,
+            Pos2::new(drag_right, header.response.rect.bottom()));
+        #[cfg(windows)]
+        let native_drag = crate::native::clipboard_drag_region(drag_rect, ui.ctx().pixels_per_point());
+        #[cfg(not(windows))]
+        let native_drag = false;
+        let drag = ui.interact(drag_rect, ui.id().with("clipboard-window-drag"), Sense::click_and_drag())
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text("拖动标题栏移动窗口");
+        if !native_drag && drag.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
         if confirm_clear {
             self.confirm_clear = true;
         }
@@ -686,73 +777,16 @@ impl Popup {
                 self.request_focus = true;
             }
         }
-        let previous = self.query.clone();
-        let mut focused = false;
-        let mut clear = false;
-        let frame = egui::Frame::new()
-            .fill(p.raised)
-            .stroke(Stroke::NONE)
-            .corner_radius(10.0)
-            .inner_margin(egui::Margin::symmetric(11, 9));
-        let inner = frame.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
-                draw_search_icon(ui, icon_rect, p.faint);
-                ui.add_space(1.0);
-                // 有内容时为右侧清除按钮留位置；没有内容时占满整行，避免视觉上多出一段空白。
-                let reserve = if self.query.is_empty() { 8.0 } else { 40.0 };
-                let edit_width = (ui.available_width() - reserve).max(80.0);
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .id_source("clipboard-search")
-                        .hint_text(
-                            RichText::new("搜索复制过的内容…")
-                                .font(theme::font(13.0, W::Regular))
-                                .color(p.faint),
-                        )
-                        .font(theme::font(13.0, W::Regular))
-                        .text_color(p.text)
-                        .frame(false)
-                        .desired_width(edit_width),
-                );
-                focused = response.has_focus();
-                if self.request_focus {
-                    response.request_focus();
-                    self.request_focus = false;
-                    self.search_focused = true;
-                    focused = true;
-                }
-                if !self.query.is_empty() {
-                    ui.add_space(2.0);
-                    if icon_button(ui, "×", p.faint, p.muted, p.hover, 12.0) {
-                        clear = true;
-                    }
-                }
-            });
-        });
-        let rect = inner.response.rect;
-        let border = if focused { p.accent } else { p.line };
-        ui.painter().rect_stroke(
-            rect,
-            10.0,
-            Stroke::new(if focused { 1.2_f32 } else { 1.0_f32 }, border),
-            StrokeKind::Inside,
-        );
-        if clear {
-            self.query.clear();
-            self.selected = 0;
-            self.selected_id = None;
-            self.sync_selection();
-            self.request_focus = true;
-        }
-        if self.query != previous {
+        let response = panel::search_field(ui, "clipboard-search", &mut self.query,
+            "搜索复制过的内容…", p, &mut self.request_focus, false);
+        if response.changed {
             self.selected = 0;
             self.selected_id = None;
             self.preview_open = false;
             self.sync_selection();
         }
-        self.search_focused = focused;
-        focused
+        self.search_focused = response.focused;
+        response.focused
     }
 
     fn status_line(&mut self, ui: &mut Ui, p: &Palette) {
@@ -1034,7 +1068,7 @@ impl Popup {
                 .show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
                     ui.horizontal(|ui| {
-                        if icon_button(ui, "←", p.muted, p.text, p.hover, 14.0) {
+                        if icon_button(ui, "←", "返回列表 · Esc", p.muted, p.text, p.hover, 14.0) {
                             self.preview_open = false;
                         }
                         ui.add_space(2.0);
@@ -1046,7 +1080,7 @@ impl Popup {
                                 .color(p.faint),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if icon_button(ui, "×", p.muted, p.text, p.hover, 14.0) {
+                            if icon_button(ui, "×", "关闭窗口", p.muted, p.text, p.hover, 14.0) {
                                 self.preview_open = false;
                             }
                             if item.image.is_some()
@@ -1245,7 +1279,7 @@ impl Popup {
                     ui.add_space(8.0);
                     hint(ui, "Del", "删除", p);
                     ui.add_space(8.0);
-                    hint(ui, "Esc", "关闭", p);
+                    hint(ui, "Esc", if self.confirm_clear { "取消" } else if self.preview_open { "返回" } else if self.query.is_empty() { "关闭" } else { "清除搜索" }, p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if paused {
                             if chip_button(ui, "已暂停 · 恢复", p.warn, with_alpha(p.warn, 0.14)) {
@@ -1312,7 +1346,7 @@ fn row(
         ui.scroll_to_rect(rect, Some(Align::Center));
     }
     let ctx = ui.ctx().clone();
-    let hover = ctx.animate_bool_with_time(
+    let hover = panel::animate_bool(&ctx,
         egui::Id::new(("clipboard-row-hover", item.id.as_str())),
         response.hovered() && !selected,
         0.10,
@@ -1321,11 +1355,11 @@ fn row(
     let radius = 9.0;
     let body = rect.shrink2(Vec2::new(0.0, 1.0));
     if selected {
-        painter.rect_filled(body, radius, mix(p.surface, p.accent, 0.13));
+        painter.rect_filled(body, radius, mix(p.hover, p.accent, 0.05));
         painter.rect_stroke(
             body,
             radius,
-            Stroke::new(1.0_f32, with_alpha(p.accent, 0.35)),
+            Stroke::new(1.0_f32, p.line_soft),
             StrokeKind::Inside,
         );
         painter.rect_filled(
@@ -1336,12 +1370,14 @@ fn row(
     } else if hover > 0.01 {
         painter.rect_filled(body, radius, mix(p.surface, p.hover, hover));
     }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, &item.text));
+    panel::focus_ring(ui, &response, p.accent, radius);
     let kind = if item.is_image() { ItemKind::Image } else { item_kind(&item.text) };
     let icon_rect = Rect::from_min_size(
         Pos2::new(rect.left() + 10.0, rect.center().y - 17.0),
         Vec2::splat(34.0),
     );
-    let tile = if selected { mix(p.raised, p.accent, 0.20) } else { p.raised };
+    let tile = if selected { mix(p.raised, p.accent, 0.10) } else { p.raised };
     painter.rect_filled(icon_rect, 9.0, tile);
     if let Some(texture) = thumbnail {
         let image_rect = icon_rect.shrink(4.0);
@@ -1702,6 +1738,29 @@ fn draw_empty_icon(painter: &egui::Painter, rect: Rect, p: &Palette, kind: Empty
 }
 
 
+fn window_pin_button(ui: &mut Ui, pinned: bool, p: &Palette) -> bool {
+    let label = if pinned { "已钉住" } else { "钉住" };
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(72.0, 26.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), pinned, label));
+    let color = if pinned { p.accent } else if response.hovered() { p.text } else { p.muted };
+    if pinned || response.hovered() {
+        ui.painter().rect_filled(rect, 7.0, if pinned { with_alpha(p.accent, 0.10) } else { p.hover });
+    }
+    panel::focus_ring(ui, &response, p.accent, 7.0);
+    let c = Pos2::new(rect.left() + 13.0, rect.center().y);
+    let stroke = Stroke::new(1.3_f32, color);
+    let point = |x, y| c + Vec2::new(x, y);
+    // A small vector pushpin keeps the control crisp at any display scale.
+    ui.painter().line_segment([point(-3.5, -6.0), point(3.5, -6.0)], stroke);
+    ui.painter().add(egui::Shape::line(vec![point(-2.5, -6.0), point(-2.5, -1.0),
+        point(-5.0, 2.0), point(5.0, 2.0), point(2.5, -1.0), point(2.5, -6.0)], stroke));
+    ui.painter().line_segment([point(0.0, 2.0), point(0.0, 7.0)], stroke);
+    ui.painter().text(Pos2::new(rect.left() + 25.0, rect.center().y), egui::Align2::LEFT_CENTER,
+        label, theme::font(11.0, W::Semibold), color);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if pinned { "取消钉住：切换应用后自动收起" } else { "钉住窗口：始终置顶，切换应用或粘贴后保持显示" }).clicked()
+}
+
 fn target_chip(ui: &mut Ui, label: &str, p: &Palette) {
     let font = theme::font(11.5, W::Semibold);
     let galley = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, p.text));
@@ -1719,41 +1778,9 @@ fn target_chip(ui: &mut Ui, label: &str, p: &Palette) {
 
 
 fn tab_button(ui: &mut Ui, p: &Palette, label: &str, count: usize, active: bool) -> bool {
-    let label_font = theme::font(12.0, if active { W::Semibold } else { W::Regular });
-    let count_font = theme::font(10.0, W::Regular);
-    let label_width = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), label_font.clone(), p.text).size().x);
-    let count_width = ui.fonts(|fonts| fonts.layout_no_wrap(count.to_string(), count_font.clone(), p.faint).size().x);
-    let width = label_width + 7.0 + count_width + 8.0;
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click());
-    let t = ui.ctx().animate_bool_with_time(egui::Id::new(("clipboard-tab", label)), active, 0.16);
-    let idle = p.muted;
-    let color = mix(idle, p.text, t);
-    let count_color = mix(p.faint, p.muted, t);
-    ui.painter().text(
-        Pos2::new(rect.left() + 2.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        label_font,
-        color,
-    );
-    ui.painter().text(
-        Pos2::new(rect.left() + 2.0 + label_width + 7.0, rect.center().y + 1.0),
-        egui::Align2::LEFT_CENTER,
-        count.to_string(),
-        count_font,
-        count_color,
-    );
-    if t > 0.01 {
-        let y = rect.bottom() - 2.0;
-        let width = (label_width + 7.0 + count_width) * t;
-        ui.painter().line_segment(
-            [Pos2::new(rect.left() + 2.0, y), Pos2::new(rect.left() + 2.0 + width, y)],
-            Stroke::new(2.0_f32, p.accent),
-        );
-    }
-    let _ = response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.clicked()
+    panel::filter_tab(ui, label, count, active, p)
 }
+
 
 pub fn relative_time(now: i64, at: i64) -> String {
     let delta = now.saturating_sub(at);
@@ -1776,6 +1803,159 @@ pub fn relative_time(now: i64, at: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn interaction_frame(ctx: &egui::Context, popup: &mut Popup, events: Vec<egui::Event>) -> egui::FullOutput {
+        popup.fade = 1.0;
+        ctx.run(egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, HEIGHT))),
+            events,
+            ..Default::default()
+        }, |ctx| { popup.panel_ui(ctx, false); })
+    }
+
+    fn pointer_button(pos: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+    }
+
+    #[test]
+    fn window_header_drag_starts_native_move() {
+        let ctx = egui::Context::default();
+        crate::theme::load_fonts(&ctx);
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        interaction_frame(&ctx, &mut popup, vec![]);
+        let start = egui::pos2(280.0, 42.0);
+        let pressed = interaction_frame(&ctx, &mut popup, vec![egui::Event::PointerMoved(start), pointer_button(start, true)]);
+        let output = interaction_frame(&ctx, &mut popup, vec![egui::Event::PointerMoved(start + Vec2::new(30.0, 10.0))]);
+        assert!(pressed.viewport_output.values().chain(output.viewport_output.values()).any(|viewport| viewport.commands.contains(&egui::ViewportCommand::StartDrag)),
+            "dragging the title bar must start an OS window move");
+    }
+
+    #[test]
+    fn window_pin_button_keeps_popup_on_focus_loss_and_can_be_undone() {
+        let ctx = egui::Context::default();
+        crate::theme::load_fonts(&ctx);
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        interaction_frame(&ctx, &mut popup, vec![]);
+        let output = interaction_frame(&ctx, &mut popup, vec![]);
+        let pin = text_shapes(&output.shapes).into_iter().find(|text| text.galley.text() == "钉住")
+            .expect("window must offer a visible pin control").visual_bounding_rect().center();
+        interaction_frame(&ctx, &mut popup, vec![egui::Event::PointerMoved(pin), pointer_button(pin, true)]);
+        let clicked = interaction_frame(&ctx, &mut popup, vec![pointer_button(pin, false)]);
+        assert!(!clicked.viewport_output.values().any(|viewport| viewport.commands.contains(&egui::ViewportCommand::StartDrag)),
+            "header controls must not initiate a window drag");
+        let start = Instant::now();
+        popup.observe_focus(true, start);
+        popup.observe_focus(false, start);
+        assert!(!popup.observe_focus(false, start + Duration::from_secs(5)), "pinned window must stay open");
+        let output = interaction_frame(&ctx, &mut popup, vec![]);
+        let unpin = text_shapes(&output.shapes).into_iter().find(|text| text.galley.text() == "已钉住")
+            .expect("pin state must be visible").visual_bounding_rect().center();
+        interaction_frame(&ctx, &mut popup, vec![egui::Event::PointerMoved(unpin), pointer_button(unpin, true)]);
+        interaction_frame(&ctx, &mut popup, vec![pointer_button(unpin, false)]);
+        popup.observe_focus(true, start);
+        popup.observe_focus(false, start);
+        assert!(popup.observe_focus(false, start + Duration::from_millis(150)), "unpin must restore automatic dismissal");
+    }
+
+    #[test]
+    fn window_pin_still_allows_explicit_close_and_resets_on_reopen() {
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.window_pinned = true;
+        assert!(popup.is_window_pinned());
+        popup.close();
+        assert!(!popup.open);
+        assert!(!popup.is_window_pinned());
+        popup.open_state(true, false, None);
+        assert!(!popup.is_window_pinned(), "each invocation starts as a quick popup");
+    }
+
+    #[test]
+    fn win_v_header_reflects_active_takeover_and_falls_back_when_disabled() {
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_win_v_active(true);
+        let active = render_popup(&mut popup, false, "");
+        assert!(contains_text(&active.shapes, "Win+V"));
+        assert!(!contains_text(&active.shapes, "Ctrl+Alt+V"));
+        popup.set_win_v_active(false);
+        let disabled = render_popup(&mut popup, false, "");
+        assert!(contains_text(&disabled.shapes, "Ctrl+Alt+V"));
+    }
+
+    #[test]
+    fn memory_closed_popup_does_not_schedule_image_decodes() {
+        let mut popup = Popup::default();
+        popup.set_items(vec![Item {
+            id: "memory-image".into(), text: "图片".into(), copied_at: 0, pinned: false,
+            image: Some(crate::clipboard::ImageRef { key: "missing-fixture".into(), width: 3840, height: 2160 }),
+        }]);
+        assert!(popup.thumb_rx.is_none(), "closed history should not decode images in the background");
+        popup.open_state(true, false, None);
+        assert!(popup.thumb_rx.is_some(), "opening must schedule the deferred thumbnails");
+    }
+
+    #[test]
+    fn memory_close_releases_textures_and_disconnects_pending_work() {
+        let ctx = egui::Context::default();
+        let before = ctx.tex_manager().read().num_allocated();
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.preview_texture = Some(("preview".into(), ctx.load_texture("memory-preview",
+            egui::ColorImage::new([1200, 800], Color32::WHITE), Default::default())));
+        popup.thumbnails.insert("thumb".into(), ctx.load_texture("memory-thumb",
+            egui::ColorImage::new([72, 41], Color32::WHITE), Default::default()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        popup.thumb_rx = Some(rx);
+        popup.thumb_sig.push(("thumb".into(), 3840, 2160));
+        popup.close();
+        assert_eq!(ctx.tex_manager().read().num_allocated(), before, "closing must release GPU texture handles");
+        assert!(tx.send(("late".into(), egui::ColorImage::new([1, 1], Color32::WHITE))).is_err(), "late work must not stay queued after close");
+        assert!(popup.thumb_sig.is_empty(), "reopening must be able to reload the same images");
+    }
+
+    #[test]
+    fn memory_history_update_keeps_existing_thumbnail() {
+        let ctx = egui::Context::default();
+        let item = |id: &str| Item { id: id.into(), text: "图片".into(), copied_at: 0, pinned: false,
+            image: Some(crate::clipboard::ImageRef { key: id.into(), width: 3840, height: 2160 }) };
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_items(vec![item("old")]);
+        let texture = ctx.load_texture("existing-thumb", egui::ColorImage::new([72, 41], Color32::WHITE), Default::default());
+        let id = texture.id();
+        popup.thumbnails.insert("old".into(), texture);
+        popup.set_items(vec![item("new"), item("old")]);
+        assert_eq!(popup.thumbnails.get("old").map(|texture| texture.id()), Some(id), "new history must not decode/upload every existing image again");
+    }
+
+    #[test]
+    fn polish_escape_returns_from_preview_then_search_then_window() {
+        let ctx = egui::Context::default();
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_items(vec![item("a", "Alpha", 1), item("b", "Beta", 2)]);
+        popup.query = "Beta".into();
+        popup.sync_selection();
+        popup.preview_open = true;
+        let press_escape = |popup: &mut Popup| {
+            let mut action = Action::None;
+            let _ = ctx.run(egui::RawInput {
+                events: vec![egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+                ..Default::default()
+            }, |ctx| action = popup.consume_navigation(ctx));
+            action
+        };
+        assert_eq!(press_escape(&mut popup), Action::None);
+        assert!(!popup.preview_open);
+        assert_eq!(popup.query, "Beta");
+        assert_eq!(press_escape(&mut popup), Action::None, "清除搜索不能顺带关闭窗口");
+        assert!(popup.query.is_empty());
+        assert_eq!(popup.filtered().len(), 2);
+        assert_eq!(press_escape(&mut popup), Action::Close { restore: true });
+    }
 
     #[test]
     fn reduced_motion_skips_panel_fade() {

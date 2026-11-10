@@ -61,7 +61,7 @@ struct Shell {
     clipboard: daozai::clipboard::Service,
     clipboard_popup: daozai::clipboard_ui::Popup,
     /// 最近一次剪贴板历史快照，供命令面板搜索。
-    clipboard_items: Vec<daozai::clipboard::Item>,
+    clipboard_items: std::sync::Arc<Vec<daozai::clipboard::Item>>,
     clipboard_sig: (bool, usize, u32, bool),
     #[cfg(windows)]
     clipboard_prev: Option<windows::Win32::Foundation::HWND>,
@@ -185,7 +185,7 @@ impl Shell {
             quota: daozai::quota::Service::start(), quota_sig: None, quota_at: PollClock::default(),
             clipboard,
             clipboard_popup: daozai::clipboard_ui::Popup::default(),
-            clipboard_items: Vec::new(),
+            clipboard_items: Default::default(),
             clipboard_sig: (clipboard_enabled, clipboard_limit, clipboard_days, clipboard_clean_links),
             #[cfg(windows)]
             clipboard_prev: None,
@@ -294,7 +294,16 @@ impl Shell {
     fn clipboard_hotkey_error(&self) -> Option<String> {
         #[cfg(windows)]
         {
-            self.native.as_ref().and_then(|native| native.hotkey_error.clone())
+            let mut errors = Vec::new();
+            if let Some(error) = self.native.as_ref().and_then(|native| native.hotkey_error.clone()) { errors.push(error); }
+            if self.app.settings.clipboard_win_v {
+                match self.input_keys.as_ref() {
+                    None => errors.push("Win+V 接管未启动，系统快捷键仍有效；请使用 Ctrl+Alt+V".into()),
+                    Some(keys) if keys.win_v_failed() => errors.push("Win+V 接管失败，已恢复系统行为；可关闭再打开开关重试".into()),
+                    _ => {}
+                }
+            }
+            (!errors.is_empty()).then(|| errors.join("；"))
         }
         #[cfg(not(windows))]
         {
@@ -302,7 +311,30 @@ impl Shell {
         }
     }
 
+    fn sync_clipboard_shortcut(&mut self, ctx: &egui::Context) {
+        #[cfg(windows)]
+        {
+            if let Some(keys) = self.input_keys.as_ref() {
+                keys.configure_win_v(self.app.settings.clipboard_win_v, ctx);
+            }
+            self.clipboard_popup.set_win_v_active(self.input_keys.as_ref().is_some_and(|keys| keys.win_v_enabled()));
+        }
+        #[cfg(not(windows))]
+        let _ = ctx;
+    }
+
     fn poll_clipboard(&mut self) {
+        // A pinned clipboard can span several applications. Track the last
+        // external foreground window, but freeze it while a copy is in flight.
+        #[cfg(windows)]
+        if self.clipboard_popup.is_window_pinned() && self.clipboard_transfer.is_none() {
+            if let Some(target) = daozai::native::external_foreground_window() {
+                if self.clipboard_prev != Some(target) {
+                    self.clipboard_prev = Some(target);
+                    self.clipboard_popup.set_target_label(daozai::native::foreground_window_label(Some(target)));
+                }
+            }
+        }
         let settings = &self.app.settings;
         let signature = (
             settings.clipboard_enabled && !settings.clipboard_paused,
@@ -319,8 +351,8 @@ impl Shell {
         while let Some(event) = self.clipboard.try_recv() {
             match event {
                 daozai::clipboard::Event::Changed(items) => {
-                    self.clipboard_popup.set_items((*items).clone());
-                    self.clipboard_items = (*items).clone();
+                    self.clipboard_popup.set_shared_items(items.clone());
+                    self.clipboard_items = items;
                     if self.command_palette.is_open() {
                         let entries = self.palette_clipboard_entries();
                         self.command_palette.set_clipboard(entries);
@@ -330,8 +362,11 @@ impl Shell {
                     if let Some((id, paste)) = self.clipboard_transfer.take() {
                         if paste {
                             #[cfg(windows)] {
-                                let target = self.clipboard_prev.take();
-                                self.close_clipboard(false);
+                                let target = self.clipboard_prev;
+                                if !self.clipboard_popup.is_window_pinned() {
+                                    self.clipboard_prev = None;
+                                    self.close_clipboard(false);
+                                }
                                 if let Err(error) = daozai::native::restore_and_paste(target) {
                                     self.app.say(format!("已复制，请手动粘贴：{error}"));
                                 }
@@ -339,12 +374,19 @@ impl Shell {
                             #[cfg(not(windows))]
                             {
                                 let _ = id;
-                                self.close_clipboard(false);
+                                if !self.clipboard_popup.is_window_pinned() {
+                                    self.close_clipboard(false);
+                                }
                                 self.app.say("已复制，请手动粘贴");
                             }
                         } else {
                             let restore = self.clipboard_prev.is_some();
-                            self.close_clipboard(restore);
+                            if self.clipboard_popup.is_window_pinned() {
+                                #[cfg(windows)]
+                                daozai::native::restore_foreground(self.clipboard_prev);
+                            } else {
+                                self.close_clipboard(restore);
+                            }
                             let _ = id;
                         }
                     } else {
@@ -365,8 +407,7 @@ impl Shell {
             }
         }
         let hotkey_error = self.clipboard_hotkey_error();
-        self.clipboard_status = hotkey_error.clone().unwrap_or_else(|| self.clipboard_status.clone());
-        self.app.clipboard_status = self.clipboard_status.clone();
+        self.app.clipboard_status = hotkey_error.clone().unwrap_or_else(|| self.clipboard_status.clone());
         self.clipboard_popup.sync(
             self.app.settings.clipboard_enabled,
             self.app.settings.clipboard_paused,
@@ -400,7 +441,9 @@ impl Shell {
             self.close_notifications();
             return;
         }
-        self.close_clipboard(false);
+        if !self.clipboard_popup.is_window_pinned() {
+            self.close_clipboard(false);
+        }
         self.command_palette.close();
         self.app.notifications_mark_seen();
         self.notifications_popup.open(
@@ -920,8 +963,8 @@ impl Shell {
     fn open_command_palette(&mut self, ctx: &egui::Context) {
         self.annotate.close();
         self.close_notifications();
-        // 两个浮层互斥：同时打开会互相抢焦点。
-        if self.clipboard_popup.open {
+        // Pinned clipboard stays available; it never requests focus again.
+        if self.clipboard_popup.open && !self.clipboard_popup.is_window_pinned() {
             self.close_clipboard(false);
         }
         let mut snapshot = self.app.palette_snapshot();
@@ -1153,6 +1196,7 @@ impl eframe::App for Shell {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.sync_clipboard_shortcut(ctx);
         if self.app.settings.stay_awake != self.stay_awake {
             self.stay_awake = self.app.settings.stay_awake;
             #[cfg(windows)]
@@ -1173,7 +1217,8 @@ impl eframe::App for Shell {
             // 一次只消费一次热键；框选层打开期间不再响应其他浮层热键。
             let screen_ocr = daozai::native::take_crop_hotkey();
             let screen_shot = daozai::native::take_screenshot_hotkey();
-            let clipboard_hotkey = daozai::native::take_clipboard_hotkey();
+            let clipboard_win_v = self.input_keys.as_ref().is_some_and(|keys| keys.take_clipboard_hotkey());
+            let clipboard_hotkey = daozai::native::take_clipboard_hotkey() || clipboard_win_v;
             let command_hotkey = daozai::native::take_command_hotkey();
             let image_ocr = daozai::native::take_ocr_hotkey();
             let notification_hotkey = daozai::native::take_notification_hotkey();
@@ -1451,6 +1496,7 @@ impl eframe::App for Shell {
         #[cfg(windows)] let autostart = self.autostart;
         #[cfg(not(windows))] let autostart = false;
         self.app.settings_ui(ctx, autostart);
+        self.sync_clipboard_shortcut(ctx);
         self.app.mail_reader_ui(ctx);
         self.show_clipboard(ctx);
         self.show_command_palette(ctx);

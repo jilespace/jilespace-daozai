@@ -905,6 +905,27 @@ fn change_gl_context(
     *current_viewport = Some(viewport_id);
 }
 
+/// Keep WGL child windows consistent with the root window created by DisplayBuilder.
+fn create_glutin_window(
+    event_loop: &ActiveEventLoop,
+    attributes: winit::window::WindowAttributes,
+    gl_config: &glutin::config::Config,
+) -> Result<Window> {
+    // glutin 0.32.3 reports false negatives for WGL_TRANSPARENT_ARB. finalize_window
+    // then disables winit's DWM transparency, making transparent pixels opaque black.
+    // WGL's root creation already bypasses finalize_window; do the same for children.
+    // Upstream fix: https://github.com/rust-windowing/glutin/pull/1746
+    #[cfg(target_os = "windows")]
+    if matches!(gl_config, glutin::config::Config::Wgl(_)) {
+        return Ok(event_loop.create_window(attributes)?);
+    }
+
+    if attributes.transparent() && gl_config.supports_transparency() == Some(false) {
+        log::error!("Cannot create transparent window: the GL config does not support it");
+    }
+    Ok(glutin_winit::finalize_window(event_loop, attributes, gl_config)?)
+}
+
 impl GlutinWindowContext {
     #[allow(unsafe_code)]
     unsafe fn new(
@@ -1122,13 +1143,7 @@ impl GlutinWindowContext {
                 event_loop,
                 viewport.builder.clone(),
             );
-            if window_attributes.transparent()
-                && self.gl_config.supports_transparency() == Some(false)
-            {
-                log::error!("Cannot create transparent window: the GL config does not support it");
-            }
-            let window =
-                glutin_winit::finalize_window(event_loop, window_attributes, &self.gl_config)?;
+            let window = create_glutin_window(event_loop, window_attributes, &self.gl_config)?;
             egui_winit::apply_viewport_builder_to_window(
                 &self.egui_ctx,
                 &window,

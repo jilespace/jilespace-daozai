@@ -166,9 +166,6 @@ impl Popup {
             if ctx.input(|input| input.viewport().close_requested()) {
                 action = Action::Close;
             }
-            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                action = Action::Close;
-            }
             let focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
             if focused {
                 self.had_focus = true;
@@ -203,6 +200,17 @@ impl Popup {
     pub fn panel_ui(&mut self, ctx: &egui::Context, dark: bool) -> Action {
         let palette = panel::apply_style(ctx, dark);
         let mut action = Action::None;
+        if !ctx.memory(|memory| memory.any_popup_open())
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if self.clear_confirm {
+                self.clear_confirm = false;
+            } else if !self.query.is_empty() {
+                self.query.clear();
+                self.focus_search = true;
+            } else {
+                action = Action::Close;
+            }
+        }
         let fade = self.fade.clamp(0.0, 1.0);
         let now = chrono::Local::now();
         egui::CentralPanel::default()
@@ -223,16 +231,10 @@ impl Popup {
                         ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
                         self.header(ui, &palette, &mut action);
                         ui.add_space(2.0);
-                        ui.label(
-                            RichText::new(if self.status.trim().is_empty() {
-                                "Windows 通知会镜像到岛上，并保存在这里。"
-                            } else {
-                                self.status.as_str()
-                            })
-                            .size(10.5)
-                            .color(palette.faint),
-                        );
-                        ui.add_space(4.0);
+                        if !self.status.trim().is_empty() {
+                            ui.add(egui::Label::new(RichText::new(&self.status).size(10.5).color(palette.faint)).truncate())
+                                .on_hover_text(&self.status);
+                        }
                         self.search_row(ui, &palette);
                         ui.add_space(4.0);
                         ui.separator();
@@ -242,7 +244,7 @@ impl Popup {
                         ui.add_space(gap);
                         ui.separator();
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Esc 关闭 · 复制按钮复制通知内容").size(10.0).color(palette.faint));
+                            panel::hint(ui, "Esc", if self.clear_confirm { "取消" } else if self.query.is_empty() { "关闭" } else { "清除搜索" }, &palette);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if !self.items.is_empty() {
                                     if ui
@@ -290,10 +292,7 @@ impl Popup {
                     });
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new(RichText::new("关闭").size(11.0).color(palette.muted)).frame(false))
-                    .clicked()
-                {
+                if panel::icon_button(ui, "×", "关闭窗口", palette.muted, palette.text, palette.hover, 16.0) {
                     *action = Action::Close;
                 }
             });
@@ -301,46 +300,23 @@ impl Popup {
     }
 
     fn search_row(&mut self, ui: &mut egui::Ui, palette: &panel::Palette) {
+        panel::search_field(ui, "notifications-search", &mut self.query,
+            "搜索应用或通知内容…", palette, &mut self.focus_search, false);
+        ui.add_space(2.0);
         ui.horizontal(|ui| {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .hint_text("搜索应用或通知内容")
-                    .desired_width(ui.available_width() - 128.0)
-                    .font(egui::FontId::proportional(11.5)),
-            );
-            if self.focus_search {
-                response.request_focus();
-                self.focus_search = false;
+            if panel::filter_tab(ui, "全部", self.items.len(), !self.unread_only, palette) {
+                self.unread_only = false;
             }
-            if !self.query.is_empty() {
-                if ui
-                    .add(egui::Button::new(RichText::new("×").size(11.0).color(palette.faint)).frame(false))
-                    .on_hover_text("清空搜索")
-                    .clicked()
-                {
-                    self.query.clear();
-                }
-            }
-            for (unread_only, label, width) in [(false, "全部", 42.0f32), (true, "未读", 42.0f32)] {
-                let selected = self.unread_only == unread_only;
-                let button = egui::Button::new(
-                    RichText::new(label)
-                        .size(10.0)
-                        .color(if selected { palette.text } else { palette.faint }),
-                )
-                .fill(if selected { palette.raised } else { Color32::TRANSPARENT })
-                .stroke(if selected { Stroke::new(1.0_f32, palette.line) } else { Stroke::NONE })
-                .corner_radius(6.0);
-                if ui.add_sized([width, 22.0], button).clicked() {
-                    self.unread_only = unread_only;
-                }
+            if panel::filter_tab(ui, "未读", self.unread, self.unread_only, palette) {
+                self.unread_only = true;
             }
         });
     }
 
     fn list(&mut self, ui: &mut egui::Ui, palette: &panel::Palette, now: &chrono::DateTime<chrono::Local>, action: &mut Action) {
+        let height = (ui.available_height() - 42.0).max(40.0);
         if self.items.is_empty() {
-            ui.add_space(70.0);
+            ui.add_space(((height - 65.0) * 0.5).max(0.0));
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("还没有收到通知").size(14.0).strong().color(palette.muted));
                 ui.add_space(4.0);
@@ -366,7 +342,7 @@ impl Popup {
             })
             .collect();
         if filtered.is_empty() {
-            ui.add_space(60.0);
+            ui.add_space(((height - 55.0) * 0.5).max(0.0));
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("没有匹配的通知").size(13.0).strong().color(palette.muted));
                 ui.add_space(3.0);
@@ -374,7 +350,6 @@ impl Popup {
             });
             return;
         }
-        let height = (ui.available_height() - 58.0).max(60.0);
         let scroll = egui::ScrollArea::vertical()
             .id_salt("notification-history")
             .auto_shrink([false, false])
@@ -401,7 +376,7 @@ impl Popup {
                                     ui.painter().circle_filled(dot.center(), 2.5, palette.accent);
                                 }
                                 // 应用名过长时按可用宽度截断，避免把右侧操作挤出行外。
-                                let app_width = (ui.available_width() - 156.0).max(48.0);
+                                let app_width = (ui.available_width() - 90.0).max(48.0);
                                 let app_font = theme::font(12.0, theme::W::Semibold);
                                 let app = truncate_to_width(ui, &item.app, app_font.clone(), app_width);
                                 ui.label(
@@ -409,51 +384,18 @@ impl Popup {
                                         .font(app_font)
                                         .color(if unread { palette.text } else { palette.muted }),
                                 );
-                                ui.label(RichText::new(time_label(item.at, *now)).size(9.5).color(palette.faint));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(RichText::new("×").size(12.0).color(palette.faint))
-                                                .frame(false),
-                                        )
-                                        .on_hover_text("删除这条")
-                                        .clicked()
-                                    {
-                                        *action = Action::Delete(id.clone());
-                                    }
-                                    if ui
-                                        .add(
-                                            egui::Button::new(RichText::new("静音").size(10.0).color(palette.faint))
-                                                .frame(false),
-                                        )
-                                        .on_hover_text("不再提醒此应用")
-                                        .clicked()
-                                    {
-                                        *action = Action::MuteApp(item.source_id.clone(), item.app.clone());
-                                    }
-                                    if !item.source_id.trim().is_empty()
-                                        && ui
-                                            .add(
-                                                egui::Button::new(
-                                                    RichText::new("打开").size(10.0).color(palette.accent),
-                                                )
-                                                .frame(false),
-                                            )
-                                            .on_hover_text("打开通知来源应用")
-                                            .clicked()
-                                    {
-                                        *action = Action::OpenApp(item.source_id.clone());
-                                    }
-                                    if ui
-                                        .add(
-                                            egui::Button::new(RichText::new("复制").size(10.0).color(palette.accent))
-                                                .frame(false),
-                                        )
-                                        .on_hover_text("复制正文")
-                                        .clicked()
-                                    {
-                                        *action = Action::Copy(body.clone());
-                                    }
+                                    ui.menu_button(RichText::new("•••").size(10.0).color(palette.muted), |ui| {
+                                        if ui.button("静音此应用").clicked() {
+                                            *action = Action::MuteApp(item.source_id.clone(), item.app.clone());
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(RichText::new("删除这条").color(palette.danger)).clicked() {
+                                            *action = Action::Delete(id.clone());
+                                            ui.close_menu();
+                                        }
+                                    }).response.on_hover_text("更多操作");
+                                    ui.label(RichText::new(time_label(item.at, *now)).size(9.5).color(palette.faint));
                                 });
                             });
                             ui.add_space(2.0);
@@ -461,6 +403,14 @@ impl Popup {
                                 egui::Label::new(RichText::new(&item.body).size(11.5).color(palette.muted))
                                     .wrap(),
                             );
+                            ui.horizontal(|ui| {
+                                if panel::link_button(ui, "复制", palette) {
+                                    *action = Action::Copy(body.clone());
+                                }
+                                if !item.source_id.trim().is_empty() && panel::link_button(ui, "打开应用", palette) {
+                                    *action = Action::OpenApp(item.source_id.clone());
+                                }
+                            });
                         });
                     ui.add_space(5.0);
                 }
@@ -481,6 +431,72 @@ impl Popup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polish_more_menu_keeps_mute_and_delete_reachable() {
+        let ctx = egui::Context::default();
+        crate::theme::load_fonts(&ctx);
+        let mut popup = Popup::default();
+        popup.open(sample(), 1, String::new());
+        popup.fade = 1.0;
+        let mut frame = |events| {
+            let mut action = Action::None;
+            let output = ctx.run(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(340.0, 300.0))),
+                events,
+                ..Default::default()
+            }, |ctx| action = popup.panel_ui(ctx, false));
+            (action, output)
+        };
+        let locate = |output: &egui::FullOutput, label: &str| {
+            let mut texts = Vec::new();
+            text_shapes(&output.shapes, &mut texts);
+            texts.iter().find(|text| text.galley.text() == label)
+                .map(|text| text.pos + text.galley.size() * 0.5)
+                .unwrap_or_else(|| panic!("缺少控件 {label}"))
+        };
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![]);
+        let (_, output) = frame(vec![]);
+        let more = locate(&output, "•••");
+        for label in ["静音此应用", "删除这条"] {
+            frame(vec![egui::Event::PointerMoved(more), pointer(more, true)]);
+            frame(vec![pointer(more, false)]);
+            let (_, output) = frame(vec![]);
+            let item = locate(&output, label);
+            frame(vec![egui::Event::PointerMoved(item), pointer(item, true)]);
+            let (action, _) = frame(vec![pointer(item, false)]);
+            if label == "静音此应用" {
+                assert!(matches!(action, Action::MuteApp(ref id, ref app) if id == "wechat.exe" && app == "微信"));
+            } else {
+                assert!(matches!(action, Action::Delete(ref id) if id == "a"));
+            }
+        }
+    }
+
+    #[test]
+    fn polish_escape_cancels_clear_then_search_then_closes() {
+        let ctx = egui::Context::default();
+        crate::theme::load_fonts(&ctx);
+        let mut popup = Popup::default();
+        popup.open(sample(), 1, String::new());
+        popup.query = "需求".into();
+        popup.clear_confirm = true;
+        for step in 0..3 {
+            let mut action = Action::None;
+            let _ = ctx.run(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(WIDTH, HEIGHT))),
+                events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+                ..Default::default()
+            }, |ctx| action = popup.panel_ui(ctx, false));
+            assert!(!popup.clear_confirm, "Esc 应先取消清空确认");
+            if step == 0 { assert_eq!(popup.query, "需求"); }
+            if step == 1 { assert!(popup.query.is_empty()); }
+            assert_eq!(matches!(action, Action::Close), step == 2);
+        }
+    }
 
     #[test]
     fn reduced_motion_skips_notification_fade() {
@@ -603,7 +619,7 @@ mod tests {
         popup.open(sample(), 1, String::new());
         let size = Vec2::new(340.0, 300.0);
         let rendered = render_sized(&mut popup, true, size);
-        for expected in ["通知", "微信", "复制", "静音"] {
+        for expected in ["通知", "微信", "复制", "•••"] {
             assert!(contains(&rendered.shapes, expected), "小窗口缺少 {expected}");
         }
         if let Some(dest) = std::env::var_os("DAOZAI_NOTIFICATION_SMALL_PREVIEW").filter(|value| !value.is_empty()) {
@@ -636,13 +652,19 @@ mod tests {
         assert!(!contains(&rendered.shapes, full), "过长应用名应被截断");
         assert!(contains(&rendered.shapes, "一个"), "截断后仍保留应用名开头");
         let window = Rect::from_min_size(Pos2::ZERO, Vec2::new(340.0, 300.0));
-        let mut texts = Vec::new();
-        text_shapes(&rendered.shapes, &mut texts);
-        for text in texts {
-            if text.galley.text().is_empty() || !text.galley.size().x.is_finite() {
-                continue;
+        for clipped in &rendered.shapes {
+            let mut texts = Vec::new();
+            text_shapes(std::slice::from_ref(clipped), &mut texts);
+            for text in texts {
+                let bounds = text.visual_bounding_rect();
+                if text.galley.text().is_empty() || !bounds.is_finite() || !bounds.intersects(clipped.clip_rect) {
+                    continue;
+                }
+                // ScrollArea intentionally lays out rows below the viewport; only painted
+                // pixels must remain inside the window. Horizontal text must still fit.
+                assert!(bounds.left() >= -8.0 && bounds.right() <= window.right() + 8.0, "文字横向溢出：{:?}", text.galley.text());
+                assert!(window.expand(8.0).contains_rect(bounds.intersect(clipped.clip_rect)), "文字超出窄面板：{:?}", text.galley.text());
             }
-            assert!(window.expand(8.0).contains_rect(text.visual_bounding_rect()), "文字超出窄面板：{:?}", text.galley.text());
         }
     }
 

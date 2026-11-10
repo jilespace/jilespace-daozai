@@ -603,10 +603,15 @@ pub fn store_image(image: &crate::ocr::Image) -> Result<ImageRef, String> {
 
 /// 生成用于列表的缩略图（等比缩放到 `max` 像素内）。
 pub fn thumbnail(image: &crate::ocr::Image, max: u32) -> crate::ocr::Image {
-    let Some(buffer) = image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone()) else {
+    // Borrow the original pixels: copying a 4K/32MP image just to make a 72px
+    // thumbnail costs 32–122 MiB before resizing has even started.
+    let Some(buffer) = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(image.width, image.height, &image.rgba) else {
         return image.clone();
     };
-    let thumb = image::DynamicImage::ImageRgba8(buffer).thumbnail(max, max).to_rgba8();
+    let ratio = f64::from(max) / f64::from(image.width.max(image.height));
+    let width = (f64::from(image.width) * ratio).round().max(1.0) as u32;
+    let height = (f64::from(image.height) * ratio).round().max(1.0) as u32;
+    let thumb = image::imageops::thumbnail(&buffer, width, height);
     crate::ocr::Image {
         width: thumb.width(),
         height: thumb.height(),

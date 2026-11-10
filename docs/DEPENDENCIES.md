@@ -4,7 +4,13 @@
 
 ## 本地补丁
 
-- `vendor/eframe`：基于 0.31.1，记录当前视口，避免 Windows WGL 在同一窗口重复切换上下文。
+- `vendor/eframe`：基于 0.31.1，记录当前视口，避免 Windows WGL 在同一窗口重复切换上下文；
+  WGL 子窗口与根窗口采用相同的 winit 创建路径，保留请求的 DWM 透明属性，绕过
+  glutin 0.32.3 对 `WGL_TRANSPARENT_ARB` 的误判。其他后端仍使用 `finalize_window`。
+  原因见 [上游修复 #1746](https://github.com/rust-windowing/glutin/pull/1746)。
+  真机回归命令：`cargo run --locked --example viewport_transparency`（Windows 解锁桌面，
+  合成蓝色背景，检查四边/圆角、不透明对照、关闭重建及真实剪贴板的深浅主题；
+  截图写入 `preview/transparency/`）。
 - `vendor/imap`：基于 2.4.1，仅关闭 `nom` 默认功能并保留 `std`，移除邮件协议解析不需要的 `lexical-core` 浮点解析依赖。
 
 ## 安全检查

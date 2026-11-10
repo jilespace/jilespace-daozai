@@ -112,10 +112,9 @@ pub(crate) fn apply_style(ctx: &egui::Context, dark: bool) -> Palette {
     palette
 }
 
-/// 面板外层的柔和投影。
+/// 当前浮层采用描边和底色区分层级，不额外绘制投影。
 pub(crate) fn shadow(_dark: bool) -> egui::epaint::Shadow {
-    // Glow 的子视口在 Windows 上无法正确合成 egui 阴影：阴影区会被画成不透明
-    // 黑色，表现为面板四周一圈黑边。改用描边+底色区分层级，避免遮挡桌面。
+    // 透明留白变黑由 vendor/eframe 的 WGL 子窗口创建补丁解决，与阴影无关。
     egui::epaint::Shadow::NONE
 }
 
@@ -185,24 +184,108 @@ pub(crate) fn section_label(ui: &mut Ui, label: &str, p: &Palette) {
 pub(crate) fn icon_button(
     ui: &mut Ui,
     glyph: &str,
+    label: &str,
     idle: Color32,
     hover_color: Color32,
     hover_bg: Color32,
     size: f32,
 ) -> bool {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
-    if response.hovered() {
-        ui.painter().circle_filled(rect.center(), 13.0, hover_bg);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    let hover = animate_bool(ui.ctx(), response.id.with("hover"), response.hovered(), 0.10);
+    if hover > 0.0 {
+        ui.painter().rect_filled(rect, 7.0, with_alpha(hover_bg, hover));
     }
+    focus_ring(ui, &response, hover_color, 7.0);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         glyph,
         theme::font(size, W::Regular),
-        if response.hovered() { hover_color } else { idle },
+        if response.is_pointer_button_down_on() { hover_color } else { mix(idle, hover_color, hover) },
     );
-    let _ = response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.clicked()
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label).clicked()
+}
+
+/// Shared motion policy: egui schedules only the frames needed by the transition.
+pub(crate) fn animate_bool(ctx: &egui::Context, id: egui::Id, on: bool, seconds: f32) -> f32 {
+    ctx.animate_bool_with_time(id, on, if crate::bar_layout::animations_enabled() { seconds } else { 0.0 })
+}
+
+pub(crate) fn focus_ring(ui: &Ui, response: &egui::Response, color: Color32, radius: f32) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(response.rect.shrink(1.0), radius, Stroke::new(1.5_f32, color), egui::StrokeKind::Inside);
+    }
+}
+
+pub(crate) struct SearchResponse {
+    pub focused: bool,
+    pub changed: bool,
+    pub cleared: bool,
+}
+
+/// Consistent search chrome for floating panels and the compact settings sidebar.
+pub(crate) fn search_field(
+    ui: &mut Ui,
+    id: &'static str,
+    query: &mut String,
+    placeholder: &str,
+    palette: &Palette,
+    request_focus: &mut bool,
+    compact: bool,
+) -> SearchResponse {
+    let previous = query.clone();
+    let shortcut = ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F));
+    *request_focus |= shortcut;
+    let mut focused = false;
+    let mut cleared = false;
+    let padding = if compact { egui::Margin::symmetric(7, 4) } else { egui::Margin::symmetric(11, 7) };
+    let inner = egui::Frame::new().fill(palette.raised).corner_radius(10.0).inner_margin(padding).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = if compact { 4.0 } else { 7.0 };
+            let icon_size = if compact { 15.0 } else { 20.0 };
+            let (icon, _) = ui.allocate_exact_size(Vec2::splat(icon_size), egui::Sense::hover());
+            draw_search_icon(ui, icon, palette.faint);
+            let reserve = if query.is_empty() { 0.0 } else { 26.0 + ui.spacing().item_spacing.x };
+            let width = (ui.available_width() - reserve).max(1.0);
+            let response = ui.add_sized([width, 26.0], egui::TextEdit::singleline(query)
+                .id(egui::Id::new(id))
+                .hint_text(RichText::new(placeholder).color(palette.faint))
+                .font(theme::font(if compact { 12.0 } else { 13.0 }, W::Regular))
+                .text_color(palette.text).frame(false));
+            if std::mem::take(request_focus) {
+                response.request_focus();
+                focused = true;
+            } else {
+                focused = response.has_focus();
+            }
+            if !query.is_empty() && icon_button(ui, "×", "清除搜索 · Esc", palette.faint, palette.text, palette.hover, 13.0) {
+                query.clear();
+                cleared = true;
+                response.request_focus();
+                focused = true;
+            }
+            response.on_hover_text("Ctrl+F 搜索 · Esc 清除搜索");
+        });
+    });
+    ui.painter().rect_stroke(inner.response.rect, 10.0,
+        Stroke::new(if focused { 1.2_f32 } else { 1.0_f32 }, if focused { palette.accent } else { palette.line }),
+        egui::StrokeKind::Inside);
+    SearchResponse { focused, changed: *query != previous, cleared }
+}
+
+pub(crate) fn filter_tab(ui: &mut Ui, label: &str, count: usize, selected: bool, p: &Palette) -> bool {
+    let font = theme::font(11.5, W::Semibold);
+    let title = format!("{label}  {count}");
+    let text = ui.fonts(|fonts| fonts.layout_no_wrap(title.clone(), font, p.text));
+    let (rect, response) = ui.allocate_exact_size(text.size() + Vec2::new(18.0, 11.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, &title));
+    let active = animate_bool(ui.ctx(), response.id.with("selected"), selected, 0.13);
+    let hover = animate_bool(ui.ctx(), response.id.with("hover"), response.hovered(), 0.10);
+    ui.painter().rect_filled(rect, 8.0, mix(p.surface, p.hover, (active * 0.85).max(hover * 0.45)));
+    ui.painter().galley_with_override_text_color(rect.center() - text.size() * 0.5, text, mix(p.muted, p.text, active));
+    focus_ring(ui, &response, p.accent, 8.0);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 pub(crate) fn chip_button(ui: &mut Ui, label: &str, color: Color32, background: Color32) -> bool {
@@ -225,7 +308,9 @@ pub(crate) fn link_button(ui: &mut Ui, label: &str, p: &Palette) -> bool {
     let galley = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, p.accent));
     let (rect, response) = ui.allocate_exact_size(galley.size() + Vec2::new(4.0, 2.0), Sense::click());
     ui.painter().galley(rect.min, galley, p.accent);
-    let hover = ui.ctx().animate_bool_with_time(egui::Id::new(("panel-link", label)), response.hovered(), 0.10);
+    let hover = animate_bool(ui.ctx(), response.id.with("hover"), response.hovered(), 0.10);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    focus_ring(ui, &response, p.accent, 3.0);
     let width = rect.width() * hover;
     ui.painter().line_segment(
         [Pos2::new(rect.left(), rect.bottom()), Pos2::new(rect.left() + width, rect.bottom())],
@@ -264,6 +349,45 @@ pub(crate) fn fitted_window_ctx(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polish_search_shortcut_and_clear_preserve_typing_focus() {
+        for compact in [false, true] {
+            let ctx = egui::Context::default();
+            theme::load_fonts(&ctx);
+            let mut query = String::new();
+            let mut frame = |events| {
+                let mut response = None;
+                let output = ctx.run(egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(if compact { 180.0 } else { 420.0 }, 100.0))),
+                    events,
+                    ..Default::default()
+                }, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        response = Some(search_field(ui, "test-search", &mut query, "搜索…", &Palette::new(false), &mut false, compact));
+                    });
+                });
+                (response.unwrap(), output, query.clone())
+            };
+            frame(vec![]);
+            let (response, _, _) = frame(vec![egui::Event::Key {
+                key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::CTRL,
+            }]);
+            assert!(response.focused, "Ctrl+F 应将焦点交给搜索");
+            let (_, output, value) = frame(vec![egui::Event::Text("中文 42".into())]);
+            assert_eq!(value, "中文 42");
+            let clear = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "×" => Some(text.pos + text.galley.size() * 0.5),
+                _ => None,
+            }).expect("非空搜索应显示清除按钮");
+            let click = |pressed| egui::Event::PointerButton { pos: clear, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            frame(vec![egui::Event::PointerMoved(clear), click(true)]);
+            let (response, _, value) = frame(vec![click(false)]);
+            assert!(response.cleared && response.focused && value.is_empty());
+            let (_, _, value) = frame(vec![egui::Event::Text("继续搜索".into())]);
+            assert_eq!(value, "继续搜索", "清除后可直接继续输入");
+        }
+    }
 
     #[test]
     fn fitted_windows_shrink_on_small_monitors() {

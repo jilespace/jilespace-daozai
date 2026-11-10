@@ -473,6 +473,25 @@ pub(crate) fn parse_due(value: &str, today: &str) -> Option<String> {
 mod tests {
     use super::*;
     #[test]
+    fn polish_idle_settings_tabs_stop_repainting() {
+        let ctx = egui::Context::default();
+        let mut delay = std::time::Duration::ZERO;
+        for frame in 0..12 {
+            let output = ctx.run(egui::RawInput {
+                time: Some(frame as f64 * 0.2),
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 100.0))),
+                ..Default::default()
+            }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    settings_tab_chip(ui, "Selected", true, 0);
+                    settings_tab_chip(ui, "Idle", false, 1);
+                });
+            });
+            delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        }
+        assert!(delay > std::time::Duration::ZERO, "静止标签不应持续请求立即重绘");
+    }
+    #[test]
     fn number_stepper_clicks_follow_steps_and_limits() {
         for (initial,step,x,expected) in [(5u32,1,127.0,6),(5,1,13.0,4),(0,1,13.0,0),(10,1,127.0,10),(9,3,127.0,10),(1,3,13.0,0)] {
             let ctx=egui::Context::default();
@@ -801,11 +820,9 @@ fn settings_tab_chip(ui: &mut egui::Ui, label: &str, selected: bool, index: usiz
     let ctx = ui.ctx().clone();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(68.0, 26.0), egui::Sense::click());
     let id = egui::Id::new(("settings-tab-chip", index));
-    let selected_t = ctx.animate_bool_with_time(id.with("selected"), selected, 0.16);
-    let hover_t = ctx.animate_bool_with_time(id.with("hover"), response.hovered() && !selected, 0.10);
-    if selected_t < 0.999 || hover_t < 0.999 {
-        ctx.request_repaint();
-    }
+    let selected_t = crate::panel::animate_bool(&ctx, id.with("selected"), selected, 0.16);
+    let hover_t = crate::panel::animate_bool(&ctx, id.with("hover"), response.hovered() && !selected, 0.10);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, label));
     let selected_fill = settings_color(&ctx, Color32::from_rgb(70, 70, 74), Color32::from_rgb(205, 215, 229));
     let hover_fill = settings_color(&ctx, Color32::from_rgb(48, 48, 52), Color32::from_rgb(224, 229, 238));
     if selected_t > 0.01 {
@@ -822,6 +839,7 @@ fn settings_tab_chip(ui: &mut egui::Ui, label: &str, selected: bool, index: usiz
             Color32::from_rgba_unmultiplied(hover_fill.r(), hover_fill.g(), hover_fill.b(), (hover_t * 200.0) as u8),
         );
     }
+    crate::panel::focus_ring(ui, &response, crate::panel::Palette::new(ctx.style().visuals.dark_mode).accent, 6.0);
     let color = if selected {
         settings_color(&ctx, Color32::WHITE, Color32::from_rgb(30, 34, 41))
     } else {
@@ -863,7 +881,7 @@ const SETTINGS_KEYWORDS: [&str; 15] = [
     "版本 关于 更新",
     "页面 显示 顺序 管理",
     "额度 账号 用量",
-    "复制 剪贴板 历史",
+    "复制 剪贴板 历史 Win+V win v 接管 快捷键",
     "透明 圆角 动效 主题 外观",
     "城市 天气 空气质量 预报",
 ];
@@ -919,6 +937,10 @@ impl App {
                 &mut self.settings.clipboard_clean_links,
             );
             ui.separator();
+            setting_row(ui, "使用岛仔接管 Win+V",
+                "开启后用 Win+V 打开岛仔；关闭开关或退出岛仔后恢复系统面板",
+                &mut self.settings.clipboard_win_v);
+            ui.separator();
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("全局热键")
@@ -927,7 +949,7 @@ impl App {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(crate::clipboard::HOTKEY_TEXT)
+                        egui::RichText::new(if self.settings.clipboard_win_v { "Win+V / Ctrl+Alt+V" } else { crate::clipboard::HOTKEY_TEXT })
                             .size(12.0)
                             .strong()
                             .color(settings_color(&ctx, Color32::from_gray(210), Color32::from_gray(55))),
@@ -1263,12 +1285,15 @@ impl App {
                 ui.add_space(5.0);
                 ui.label(egui::RichText::new("设置").size(11.0).color(settings_color(ctx,Color32::from_gray(150),Color32::from_gray(105))));
                 ui.add_space(6.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_query)
-                        .hint_text("搜索设置…")
-                        .desired_width(ui.available_width())
-                        .font(egui::FontId::proportional(12.0)),
-                );
+                let palette = crate::panel::Palette::new(dark);
+                let mut focus_search = false;
+                if !self.settings_query.is_empty() && !ctx.memory(|memory| memory.any_popup_open())
+                    && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                    self.settings_query.clear();
+                    focus_search = true;
+                }
+                crate::panel::search_field(ui, "settings-search", &mut self.settings_query,
+                    "搜索设置…", &palette, &mut focus_search, true);
                 ui.add_space(6.0);
                 let query = self.settings_query.trim().to_lowercase();
                 let matched = self.apply_settings_query();
@@ -1294,17 +1319,19 @@ impl App {
                     }
                     let selected=(start..=end).contains(&self.settings_tab);
                     let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),36.0),egui::Sense::click());
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, name));
+                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
                     if response.clicked() && !selected{self.settings_tab=target;}
                     if selected {
                         ui.painter().rect_filled(rect,7.0,settings_color(ctx,Color32::from_rgb(43,43,46),Color32::from_rgb(214,221,232)));
                     } else {
-                        let hover=ctx.animate_bool_with_time(egui::Id::new(("settings-sidebar-hover",name)),response.hovered(),0.10);
+                        let hover=crate::panel::animate_bool(ctx,egui::Id::new(("settings-sidebar-hover",name)),response.hovered(),0.10);
                         if hover>0.01 {
                             let fill=settings_color(ctx,Color32::from_rgb(30,30,33),Color32::from_rgb(225,230,238));
                             ui.painter().rect_filled(rect,7.0,Color32::from_rgba_unmultiplied(fill.r(),fill.g(),fill.b(),(hover*255.0) as u8));
                         }
-                        if hover<0.99 {ctx.request_repaint();}
                     }
+                    crate::panel::focus_ring(ui, &response, palette.accent, 7.0);
                     let icon=match start {
                         0=>egui::include_image!("../assets/settings-icons/system/general.svg"),
                         11=>egui::include_image!("../assets/settings-icons/system/quota.svg"),
@@ -1497,7 +1524,7 @@ impl App {
                         settings_card(ui,|ui|{
                             for (name, description, keys) in [
                                 ("命令面板","搜索页面、设置与已安装应用，也可直接计算或换算",crate::command_palette::HOTKEY_TEXT),
-                                ("剪贴板历史","搜索并粘贴最近复制的文本",crate::clipboard::HOTKEY_TEXT),
+                                ("剪贴板历史","搜索并粘贴最近复制的文本",if self.settings.clipboard_win_v { "Win+V / Ctrl+Alt+V" } else { crate::clipboard::HOTKEY_TEXT }),
                                 ("识别图片文字","读取剪贴板里的图片，用 Windows 本地 OCR 识别",crate::ocr::HOTKEY_TEXT),
                                 ("截屏框选取字","框选屏幕区域后本地 OCR 识别","Ctrl+Alt+Shift+O"),
                                 ("截屏保存","框选后复制图片并保存到「图片\\岛仔截图」","Ctrl+Alt+Shift+S"),

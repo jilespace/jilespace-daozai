@@ -164,7 +164,9 @@ fn mask_component(pixel: u32, mask: u32) -> u8 {
 pub fn decode_png(bytes: &[u8]) -> Result<Image, String> {
     let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
         .map_err(|_| "PNG 图片解码失败".to_string())?;
-    let rgba = decoded.to_rgba8();
+    // RGBA PNGs already own the desired buffer; moving it avoids a second full
+    // image allocation (31.6 MiB for a 4K screenshot).
+    let rgba = decoded.into_rgba8();
     let (width, height) = rgba.dimensions();
     if width == 0 || height == 0 {
         return Err("图片尺寸无效".into());

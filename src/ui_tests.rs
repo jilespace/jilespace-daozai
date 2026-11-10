@@ -4109,11 +4109,13 @@ fn clipboard_settings_default_off_and_round_trip() {
     let mut h = H::new();
 
     assert!(!h.app.settings.clipboard_enabled);
+    assert!(!h.app.settings.clipboard_win_v);
     assert!(!h.app.settings.clipboard_paused);
     assert_eq!(h.app.settings.clipboard_limit, 200);
     assert_eq!(h.app.settings.clipboard_days, 7);
 
     h.app.settings.clipboard_enabled = true;
+    h.app.settings.clipboard_win_v = true;
     h.app.settings.clipboard_paused = true;
     h.app.settings.clipboard_limit = 80;
     h.app.settings.clipboard_days = 3;
@@ -4121,6 +4123,7 @@ fn clipboard_settings_default_off_and_round_trip() {
 
     let loaded = crate::model::Settings::load();
     assert!(loaded.clipboard_enabled);
+    assert!(loaded.clipboard_win_v);
     assert!(loaded.clipboard_paused);
     assert_eq!(loaded.clipboard_limit, 80);
     assert_eq!(loaded.clipboard_days, 3);
@@ -4132,6 +4135,11 @@ fn clipboard_settings_default_off_and_round_trip() {
     )
     .unwrap();
     let clamped = crate::model::Settings::load();
+    assert!(!clamped.clipboard_win_v, "old settings must preserve Windows Win+V behavior");
     assert_eq!(clamped.clipboard_limit, 500);
     assert_eq!(clamped.clipboard_days, 1);
+    let mut restored = loaded;
+    restored.clipboard_win_v = false;
+    restored.save();
+    assert!(!crate::model::Settings::load().clipboard_win_v);
 }

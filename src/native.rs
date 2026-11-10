@@ -84,6 +84,69 @@ fn inside_hit(x: i32, y: i32) -> bool {
     hit().lock().unwrap_or_else(|e|e.into_inner()).iter().any(|&(l,t,r,b)|x>=l&&x<r&&y>=t&&y<b)
 }
 
+const CLIPBOARD_DRAG_SUBCLASS: usize = SUBCLASS_ID + 3;
+thread_local! {
+    // The window and its callback run on the owning UI thread. No per-frame
+    // allocation or undocumented common-controls exports are required.
+    static CLIPBOARD_DRAG_REGION: std::cell::Cell<Option<(isize, RECT)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Let Windows start moving the popup on the original mouse-down, before egui
+/// can coalesce a quick press/move into a frame whose pointer is outside the header.
+pub fn clipboard_drag_region(rect: eframe::egui::Rect, pixels_per_point: f32) -> bool {
+    let Ok(hwnd) = (unsafe { FindWindowW(None, windows::core::w!("剪贴板 · 岛仔")) }) else { return false; };
+    let rect = RECT {
+        left: (rect.left() * pixels_per_point).round() as i32,
+        top: (rect.top() * pixels_per_point).round() as i32,
+        right: (rect.right() * pixels_per_point).round() as i32,
+        bottom: (rect.bottom() * pixels_per_point).round() as i32,
+    };
+    set_clipboard_drag_region(hwnd, rect)
+}
+
+fn set_clipboard_drag_region(hwnd: HWND, rect: RECT) -> bool {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    unsafe {
+        let mut pid = 0;
+        let thread = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        // Do not subclass another process or thread (including offscreen tests).
+        if pid != GetCurrentProcessId() || thread != GetCurrentThreadId() { return false; }
+        let already_attached = CLIPBOARD_DRAG_REGION.with(|state| {
+            state.replace(Some((hwnd.0 as isize, rect))).is_some_and(|(handle, _)| handle == hwnd.0 as isize)
+        });
+        if already_attached { return true; }
+        if !SetWindowSubclass(hwnd, Some(clipboard_drag_subclass), CLIPBOARD_DRAG_SUBCLASS, 0).as_bool() {
+            CLIPBOARD_DRAG_REGION.with(|state| state.set(None));
+            return false;
+        }
+        true
+    }
+}
+
+unsafe extern "system" fn clipboard_drag_subclass(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, id: usize, _data: usize) -> LRESULT {
+    if msg == WM_NCDESTROY {
+        let _ = RemoveWindowSubclass(hwnd, Some(clipboard_drag_subclass), id);
+        CLIPBOARD_DRAG_REGION.with(|state| {
+            if state.get().is_some_and(|(handle, _)| handle == hwnd.0 as isize) { state.set(None); }
+        });
+    } else if msg == WM_NCHITTEST {
+        let mut window = RECT::default();
+        if GetWindowRect(hwnd, &mut window).is_ok() {
+            let x = (lp.0 & 0xffff) as u16 as i16 as i32 - window.left;
+            let y = ((lp.0 >> 16) & 0xffff) as u16 as i16 as i32 - window.top;
+            let caption = CLIPBOARD_DRAG_REGION.with(|state| state.get().is_some_and(|(handle, region)|
+                handle == hwnd.0 as isize && x >= region.left && x < region.right && y >= region.top && y < region.bottom));
+            if caption {
+                return LRESULT(HTCAPTION as isize);
+            }
+        }
+    } else if msg == WM_NCLBUTTONDBLCLK && wp.0 == HTCAPTION as usize {
+        // A fixed-size popup has no maximize affordance.
+        return LRESULT(0);
+    }
+    DefSubclassProc(hwnd, msg, wp, lp)
+}
+
 fn file_drag_region(region:(i32,i32,i32,i32),zone:Option<(i32,i32,i32,i32)>,capture:bool)->(i32,i32,i32,i32){
     match zone.filter(|_|capture) {
         Some(zone)=>(region.0.min(zone.0),region.1.min(zone.1),region.2.max(zone.2),region.3.max(zone.3)),
@@ -990,6 +1053,34 @@ impl Drop for Window {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_title_hit_test_excludes_controls_and_tracks_region_updates() {
+        unsafe {
+            let hwnd = CreateWindowExW(WS_EX_NOACTIVATE, windows::core::w!("STATIC"),
+                windows::core::w!(""), WS_POPUP, -1000, -1000, 560, 520, None, None, None, None).unwrap();
+            let region = RECT { left: 29, top: 29, right: 370, bottom: 56 };
+            let hit_test = |x: i32, y: i32| {
+                let mut window = RECT::default();
+                GetWindowRect(hwnd, &mut window).unwrap();
+                let point = LPARAM((((window.top + y) as u16 as u32) << 16 |
+                    (window.left + x) as u16 as u32) as isize);
+                SendMessageW(hwnd, WM_NCHITTEST, WPARAM(0), point).0
+            };
+            assert_ne!(hit_test(280, 42), HTCAPTION as isize, "reproduce missing native drag region");
+            assert!(set_clipboard_drag_region(hwnd, region));
+            assert_eq!(hit_test(280, 42), HTCAPTION as isize);
+            assert_eq!(hit_test(60, 42), HTCAPTION as isize, "title text also drags");
+            assert_ne!(hit_test(455, 42), HTCAPTION as isize, "pin button must remain clickable");
+            assert_ne!(hit_test(518, 42), HTCAPTION as isize, "close button must remain clickable");
+            assert_ne!(hit_test(280, 94), HTCAPTION as isize, "search must remain editable");
+            assert!(set_clipboard_drag_region(hwnd, RECT { right: 200, ..region }));
+            assert_ne!(hit_test(280, 42), HTCAPTION as isize, "narrow layouts must update hit bounds");
+            assert_eq!(hit_test(100, 42), HTCAPTION as isize);
+            DestroyWindow(hwnd).unwrap();
+            assert!(CLIPBOARD_DRAG_REGION.with(|state| state.get().is_none()), "destroy must clear native state");
+        }
+    }
 
     #[test]
     fn clipboard_popup_geometry_follows_cursor_and_clamps_to_work_area() {

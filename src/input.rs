@@ -121,9 +121,16 @@ impl SwitchKeys {
 #[cfg(windows)]
 mod shortcuts {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::{Foundation::{HINSTANCE,LPARAM,LRESULT,WPARAM},System::LibraryLoader::GetModuleHandleW,UI::WindowsAndMessaging::*};
     thread_local!{static KEYS:RefCell<SwitchKeys>=RefCell::new(SwitchKeys::default());}
+    thread_local! {
+        static WIN_V: RefCell<crate::clipboard_hotkey::WinV> = RefCell::new(Default::default());
+        static WIN_V_REQUESTED: Cell<bool> = const { Cell::new(false) };
+        static WIN_V_FAILED: Cell<bool> = const { Cell::new(false) };
+        static REPAINT: RefCell<Option<eframe::egui::Context>> = const { RefCell::new(None) };
+    }
     pub struct Shortcuts(HHOOK);
     impl Shortcuts {
         pub fn start()->Option<Self>{unsafe{
@@ -131,19 +138,74 @@ mod shortcuts {
         }}
         pub fn allows(&self,context:(usize,usize))->bool{KEYS.with(|keys|keys.borrow_mut().allows(context,Instant::now()))}
         pub fn clear(&self){KEYS.with(|keys|keys.borrow_mut().clear());SWITCH_AT.store(0,std::sync::atomic::Ordering::Relaxed);}
+        pub fn configure_win_v(&self, enabled: bool, ctx: &eframe::egui::Context) {
+            REPAINT.with(|repaint| {
+                if repaint.borrow().is_none() { *repaint.borrow_mut() = Some(ctx.clone()); }
+            });
+            if WIN_V_REQUESTED.with(|requested| requested.replace(enabled)) != enabled {
+                WIN_V_FAILED.with(|failed| failed.set(false));
+                WIN_V.with(|state| state.borrow_mut().set_enabled(enabled));
+            }
+        }
+        pub fn win_v_enabled(&self) -> bool { WIN_V.with(|state| state.borrow().enabled()) }
+        pub fn win_v_failed(&self) -> bool { WIN_V_FAILED.with(Cell::get) }
+        pub fn take_clipboard_hotkey(&self) -> bool {
+            if !WIN_V.with(|state| state.borrow().pending()) { return false; }
+            let (win, other) = modifiers();
+            let released = !win && !other && unsafe { GetAsyncKeyState(VK_V.0 as i32) >= 0 };
+            WIN_V.with(|state| state.borrow_mut().take(released))
+        }
     }
     impl Drop for Shortcuts {
-        fn drop(&mut self){unsafe{let _=UnhookWindowsHookEx(self.0);}}
+        fn drop(&mut self){
+            unsafe{let _=UnhookWindowsHookEx(self.0);}
+            WIN_V.with(|state| *state.borrow_mut() = Default::default());
+            WIN_V_REQUESTED.with(|value| value.set(false));
+            WIN_V_FAILED.with(|value| value.set(false));
+            REPAINT.with(|repaint| *repaint.borrow_mut() = None);
+        }
+    }
+    fn modifiers() -> (bool, bool) {
+        let held = |key: VIRTUAL_KEY| unsafe { GetAsyncKeyState(key.0 as i32) < 0 };
+        ([VK_LWIN,VK_RWIN].into_iter().any(held),
+            [VK_LCONTROL,VK_RCONTROL,VK_LMENU,VK_RMENU,VK_LSHIFT,VK_RSHIFT].into_iter().any(held))
+    }
+    fn mask_start_menu() -> bool {
+        // PowerToys uses this inert dummy-key pair so the unconsumed Win-up
+        // doesn't open Start after the real V-down was intercepted.
+        // https://github.com/microsoft/PowerToys/blob/main/doc/devdocs/modules/keyboardmanager/keyboardmanager.md#dummy-key-events
+        let key = |flags| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT {
+            wVk: VIRTUAL_KEY(0xff), dwFlags: flags, dwExtraInfo: 0xDA0A, ..Default::default()
+        } } };
+        let events = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+        let sent = unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) };
+        if sent == 1 { unsafe { let _ = SendInput(&events[1..], std::mem::size_of::<INPUT>() as i32); } }
+        sent == 2
+    }
+    fn process_win_v(vk: u32, down: bool, injected: bool, win: bool, other: bool, mask: impl FnOnce() -> bool) -> bool {
+        let decision = WIN_V.with(|state| state.borrow_mut().key(vk, down, injected, win, other));
+        // Release the RefCell borrow before SendInput can reenter this hook.
+        let failed = decision.mask_start_menu && !mask();
+        if failed {
+            WIN_V.with(|state| state.borrow_mut().abort_capture());
+            WIN_V_FAILED.with(|value| value.set(true));
+        }
+        if failed || WIN_V.with(|state| state.borrow().pending()) {
+            REPAINT.with(|repaint| { if let Some(ctx) = repaint.borrow().as_ref() { ctx.request_repaint(); } });
+        }
+        decision.suppress && !failed
     }
     unsafe extern "system" fn on_key(code:i32,wp:WPARAM,lp:LPARAM)->LRESULT{
         if code==0 {
             let event=&*(lp.0 as *const KBDLLHOOKSTRUCT);
             if !event.flags.contains(LLKHF_INJECTED){
+                let down=matches!(wp.0 as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
+                let (win,other)=if event.vkCode==VK_V.0 as u32 {modifiers()}else{(false,false)};
+                if process_win_v(event.vkCode,down,false,win,other,mask_start_menu) {return LRESULT(1);}
                 let foreground=GetForegroundWindow();
                 let thread=GetWindowThreadProcessId(foreground,None);
                 let mut info=GUITHREADINFO{cbSize:std::mem::size_of::<GUITHREADINFO>()as u32,..Default::default()};
                 let focus=if GetGUIThreadInfo(thread,&mut info).is_ok()&&!info.hwndFocus.0.is_null(){info.hwndFocus}else{foreground};
-                let down=matches!(wp.0 as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
                 KEYS.with(|keys|{
                     let mut keys=keys.borrow_mut();keys.key(event.vkCode,down,(foreground.0 as usize,focus.0 as usize),Instant::now());
                     if keys.pending.is_some(){SWITCH_AT.store(windows::Win32::System::SystemInformation::GetTickCount64(),std::sync::atomic::Ordering::Relaxed);}
@@ -151,6 +213,50 @@ mod shortcuts {
             }
         }
         CallNextHookEx(None,code,wp,lp)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn win_v_hook_routes_requests_and_releases_state_on_drop() {
+            let listener = Shortcuts::start().unwrap();
+            let ctx = eframe::egui::Context::default();
+            listener.configure_win_v(true, &ctx);
+            assert!(listener.win_v_enabled());
+            let mut masks = 0;
+            for _ in 0..3 {
+                assert!(process_win_v(0x56,true,false,true,false,|| { masks += 1; true }));
+            }
+            assert_eq!(masks, 1, "mask only the first down, never every repeat");
+            assert!(process_win_v(0x56,false,false,false,false,|| panic!("release must not mask")));
+            assert!(WIN_V.with(|state| state.borrow_mut().take(true)));
+            assert!(!listener.take_clipboard_hotkey());
+            listener.configure_win_v(false, &ctx);
+            assert!(!process_win_v(0x56,true,false,true,false,|| panic!("disabled hook must pass through")));
+            drop(listener);
+            assert!(!WIN_V_REQUESTED.with(Cell::get));
+            assert!(!WIN_V.with(|state| state.borrow().enabled()));
+            assert!(REPAINT.with(|state| state.borrow().is_none()));
+        }
+
+        #[test]
+        fn win_v_hook_mask_failure_passes_input_and_requires_explicit_retry() {
+            let listener = Shortcuts::start().unwrap();
+            let ctx = eframe::egui::Context::default();
+            listener.configure_win_v(true, &ctx);
+            assert!(!process_win_v(0x56,true,false,true,false,|| false));
+            assert!(listener.win_v_failed());
+            assert!(!listener.win_v_enabled());
+            assert!(!WIN_V.with(|state| state.borrow_mut().take(true)));
+            listener.configure_win_v(true, &ctx);
+            assert!(!listener.win_v_enabled(), "a repaint must not retry a failed hook");
+            assert!(!process_win_v(0x56,false,false,false,false,|| true));
+            listener.configure_win_v(false, &ctx);
+            listener.configure_win_v(true, &ctx);
+            assert!(!listener.win_v_failed());
+            assert!(process_win_v(0x56,true,false,true,false,|| true));
+        }
     }
 }
 #[cfg(windows)]

@@ -158,6 +158,8 @@ pub struct Settings {
     pub calendar_prompt: bool,
     pub calendar_auto_sync: bool,
     pub clipboard_enabled: bool,
+    /// Opt-in takeover; absent in existing settings means Windows keeps Win+V.
+    pub clipboard_win_v: bool,
     pub clipboard_paused: bool,
     pub clipboard_limit: u32,
     pub clipboard_days: u32,
@@ -182,7 +184,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false,true], page_order: [0,1,2,3,4,5,6,7,8,9,10,11], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, clipboard_clean_links: true, remember_pins: false, dnd_enabled: false, dnd_start: 23, dnd_end: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
+        Self { settings_theme: Default::default(), pet: true, minimal: false, browser_minimal: false, visible_pages: [true,true,true,true,true,true,true,true,true,true,false,true], page_order: [0,1,2,3,4,5,6,7,8,9,10,11], show_battery: true, island_opacity: 100, island_radius: 100, motion: MotionPreference::System, resident_order: Vec::new(), system_hud: true, read_notifications:false, notifications: true, sound: false, lyrics_enabled:true, island_lyrics:false, lyric_delay_ms:-350, hide_fullscreen: true, focus_minutes: 25, rest_minutes: 5, water_minutes: 45, serving_ml: 250, water_start: 9, water_end: 22, mail_enabled: true, mail_code: true, mail_interval: 120, mail_ics: 15, ignored_mail_events: Vec::new(), calendar_prompt: true, calendar_auto_sync: true, clipboard_enabled: false, clipboard_win_v: false, clipboard_paused: false, clipboard_limit: 200, clipboard_days: 7, clipboard_clean_links: true, remember_pins: false, dnd_enabled: false, dnd_start: 23, dnd_end: 7, stay_awake: false, audio_visualizer: false, weather_enabled: false, weather_city: crate::weather::DEFAULT_CITY.into(), weather_refresh_minutes: crate::weather::DEFAULT_REFRESH_MINUTES }
     }
 }
 
@@ -242,6 +244,7 @@ impl Settings {
                 "calendar_prompt" => s.calendar_prompt = v != "0",
                 "calendar_auto_sync" => s.calendar_auto_sync = v != "0",
                 "clipboard_enabled" => s.clipboard_enabled = v == "1",
+                "clipboard_win_v" => s.clipboard_win_v = v == "1",
                 "clipboard_paused" => s.clipboard_paused = v == "1",
                 "clipboard_limit" => {
                     s.clipboard_limit = v.parse::<u32>().unwrap_or(200).clamp(50, 500)
@@ -305,6 +308,7 @@ impl Settings {
                 ("calendar_prompt".into(), (self.calendar_prompt as u8).to_string()),
                 ("calendar_auto_sync".into(), (self.calendar_auto_sync as u8).to_string()),
                 ("clipboard_enabled".into(), (self.clipboard_enabled as u8).to_string()),
+                ("clipboard_win_v".into(), (self.clipboard_win_v as u8).to_string()),
                 ("clipboard_paused".into(), (self.clipboard_paused as u8).to_string()),
                 ("clipboard_limit".into(), self.clipboard_limit.to_string()),
                 ("clipboard_days".into(), self.clipboard_days.to_string()),

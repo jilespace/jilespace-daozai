@@ -6,7 +6,7 @@
 //! 这样可以在无窗口环境里完整回归。
 
 use crate::panel::{
-    self, draw_search_icon, hint, icon_button, keycap, mix, with_alpha, Palette,
+    self, hint, icon_button, keycap, mix, with_alpha, Palette,
 };
 use crate::theme::{self, W};
 use eframe::egui::{
@@ -328,6 +328,13 @@ impl Panel {
         self.shown = false;
         self.shown_at = None;
         self.position = None;
+        // The application catalog stays cached, but the query-specific copies
+        // (including clipboard snippets) are rebuilt on the next open.
+        self.base = Vec::new();
+        self.results = Vec::new();
+        self.clipboard = Vec::new();
+        self.query = String::new();
+        self.selected_id = None;
     }
 
     pub fn set_hotkey_error(&mut self, error: Option<String>) {
@@ -917,6 +924,9 @@ impl Panel {
     }
 
     fn consume_navigation(&mut self, ctx: &egui::Context) -> Action {
+        if ctx.memory(|memory| memory.any_popup_open()) {
+            return Action::None;
+        }
         let (up, down, enter, escape) = ctx.input_mut(|input| {
             (
                 input.consume_key(Modifiers::NONE, Key::ArrowUp),
@@ -927,7 +937,15 @@ impl Panel {
         });
         let mut action = Action::None;
         if escape {
-            action = Action::Close;
+            if self.query.is_empty() {
+                return Action::Close;
+            }
+            self.query.clear();
+            self.selected = 0;
+            self.selected_id = None;
+            self.rebuild();
+            self.request_focus = true;
+            return Action::None;
         }
         if up {
             self.move_selection(-1);
@@ -954,7 +972,7 @@ impl Panel {
             ui.add_space(6.0);
             keycap(ui, "Ctrl+Alt+K", p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, "×", p.muted, p.text, p.hover, 16.0) {
+                if icon_button(ui, "×", "关闭窗口", p.muted, p.text, p.hover, 16.0) {
                     action = Action::Close;
                 }
             });
@@ -979,65 +997,10 @@ impl Panel {
                 self.request_focus = true;
             }
         }
-        let mut focused = false;
-        let mut clear = false;
-        let frame = egui::Frame::new()
-            .fill(p.raised)
-            .stroke(Stroke::NONE)
-            .corner_radius(10.0)
-            .inner_margin(egui::Margin::symmetric(11, 9));
-        let inner = frame.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
-                draw_search_icon(ui, icon_rect, p.faint);
-                ui.add_space(1.0);
-                // 有内容时为右侧清除按钮留位置；没有内容时占满整行，避免视觉上多出一段空白。
-                let reserve = if self.query.is_empty() { 8.0 } else { 40.0 };
-                let edit_width = (ui.available_width() - reserve).max(80.0);
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .id_source("command-palette-search")
-                        .hint_text(
-                            RichText::new("搜索页面、设置、应用，或输入 12*8、90f to c")
-                                .font(theme::font(13.0, W::Regular))
-                                .color(p.faint),
-                        )
-                        .font(theme::font(13.0, W::Regular))
-                        .text_color(p.text)
-                        .frame(false)
-                        .desired_width(edit_width),
-                );
-                focused = response.has_focus();
-                if self.request_focus {
-                    response.request_focus();
-                    self.request_focus = false;
-                    self.search_focused = true;
-                    focused = true;
-                }
-                if !self.query.is_empty() {
-                    ui.add_space(2.0);
-                    if icon_button(ui, "×", p.faint, p.muted, p.hover, 12.0) {
-                        clear = true;
-                    }
-                }
-            });
-        });
-        let rect = inner.response.rect;
-        ui.painter().rect_stroke(
-            rect,
-            10.0,
-            Stroke::new(if focused { 1.2_f32 } else { 1.0_f32 }, if focused { p.accent } else { p.line }),
-            egui::StrokeKind::Inside,
-        );
-        if clear {
-            self.request_focus = true;
-            self.search_focused = true;
-            self.selected = 0;
-            self.selected_id = None;
-            self.rebuild();
-        }
-        self.search_focused = focused;
-        (focused, clear)
+        let response = panel::search_field(ui, "command-palette-search", &mut self.query,
+            "搜索页面、设置、应用，或输入算式…", p, &mut self.request_focus, false);
+        self.search_focused = response.focused;
+        (response.focused, response.cleared)
     }
 
     fn list_body(&mut self, ui: &mut Ui, rect: Rect, p: &Palette) -> Action {
@@ -1125,7 +1088,7 @@ impl Panel {
                 ui.add_space(8.0);
                 hint(ui, "Enter", "执行", p);
                 ui.add_space(8.0);
-                hint(ui, "Esc", "关闭", p);
+                hint(ui, "Esc", if self.query.is_empty() { "关闭" } else { "清除搜索" }, p);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let text = if self.query.trim().is_empty() {
                         "输入可搜索应用、设置与换算".to_string()
@@ -1158,7 +1121,7 @@ fn entry_row(
         ui.scroll_to_rect(rect, Some(Align::Center));
     }
     let ctx = ui.ctx().clone();
-    let hover = ctx.animate_bool_with_time(
+    let hover = panel::animate_bool(&ctx,
         egui::Id::new(("command-row-hover", entry.id.as_str())),
         response.hovered() && !selected,
         0.09,
@@ -1167,11 +1130,11 @@ fn entry_row(
     let radius = 9.0;
     let body = rect.shrink2(Vec2::new(0.0, 1.0));
     if selected {
-        painter.rect_filled(body, radius, mix(p.surface, p.accent, 0.13));
+        painter.rect_filled(body, radius, mix(p.hover, p.accent, 0.05));
         painter.rect_stroke(
             body,
             radius,
-            Stroke::new(1.0_f32, with_alpha(p.accent, 0.35)),
+            Stroke::new(1.0_f32, p.line_soft),
             egui::StrokeKind::Inside,
         );
         painter.rect_filled(
@@ -1182,6 +1145,8 @@ fn entry_row(
     } else if hover > 0.01 {
         painter.rect_filled(body, radius, mix(p.surface, p.hover, hover));
     }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, &entry.title));
+    panel::focus_ring(ui, &response, p.accent, radius);
     let icon_rect = Rect::from_min_size(
         Pos2::new(rect.left() + 10.0, rect.center().y - 14.0),
         Vec2::splat(28.0),
@@ -1193,7 +1158,7 @@ fn entry_row(
             if selected { mix(tint, p.text, 0.35) } else { tint },
         ),
         _ => (
-            if selected { mix(p.raised, p.accent, 0.22) } else { p.raised },
+            if selected { mix(p.raised, p.accent, 0.10) } else { p.raised },
             if selected { p.accent } else { p.muted },
         ),
     };
@@ -1966,6 +1931,34 @@ fn convert_units(query: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_close_drops_search_results_and_reopens() {
+        let mut panel = palette_for_test("剪贴板");
+        assert!(!panel.base.is_empty() && !panel.results.is_empty());
+        panel.close();
+        assert!(panel.base.is_empty() && panel.results.is_empty(), "closed panel must release duplicated search strings");
+        let snapshot = panel.snapshot.clone();
+        panel.open(&snapshot);
+        assert!(!panel.results.is_empty(), "reopening must rebuild the commands");
+    }
+
+    #[test]
+    fn polish_escape_clears_results_before_closing() {
+        let ctx = egui::Context::default();
+        let mut palette = palette_for_test("不存在xyz");
+        assert!(palette.results.is_empty());
+        for expected in [Action::None, Action::Close] {
+            let mut action = Action::None;
+            let _ = ctx.run(egui::RawInput {
+                events: vec![egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+                ..Default::default()
+            }, |ctx| action = palette.consume_navigation(ctx));
+            assert_eq!(action, expected);
+            assert!(palette.query.is_empty());
+            assert!(!palette.results.is_empty(), "清除后立即恢复默认操作");
+        }
+    }
 
     #[test]
     fn reduced_motion_skips_palette_fade() {
