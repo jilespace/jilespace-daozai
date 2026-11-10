@@ -10,6 +10,23 @@ use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_CITY: &str = "北京";
+pub const MAX_CITIES: usize = 5;
+
+/// 解析城市列表：支持中英文逗号、顿号、分号与斜杠分隔，去重并限制 5 个。
+pub fn parse_cities(raw: &str) -> Vec<String> {
+    let mut cities = Vec::new();
+    for part in raw.split([',', '，', '、', ';', '；', '/', '|']) {
+        let city = part.trim();
+        if city.is_empty() || cities.iter().any(|existing: &String| existing == city) {
+            continue;
+        }
+        cities.push(city.to_string());
+        if cities.len() >= MAX_CITIES {
+            break;
+        }
+    }
+    cities
+}
 pub const DEFAULT_REFRESH_MINUTES: u32 = 30;
 const MIN_REFRESH_MINUTES: u32 = 5;
 const MAX_REFRESH_MINUTES: u32 = 180;
@@ -565,6 +582,14 @@ mod tests {
         assert_eq!(weather.days[1].precip_chance, Some(70));
         assert_eq!(weather.sunrise.as_deref(), Some("06:52"));
         assert_eq!(weather.sunset.as_deref(), Some("16:58"));
+    }
+
+    #[test]
+    fn city_lists_are_split_deduped_and_capped() {
+        assert_eq!(parse_cities("北京、上海, 广州;深圳/杭州|成都"), vec!["北京", "上海", "广州", "深圳", "杭州"]);
+        assert_eq!(parse_cities(" 北京，北京, "), vec!["北京"]);
+        assert!(parse_cities("").is_empty());
+        assert_eq!(parse_cities("New York, 东京").len(), 2);
     }
 
     #[test]

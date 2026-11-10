@@ -200,6 +200,29 @@ fn system_notifications_are_stored_and_mirrored_to_the_island() {
 }
 
 #[test]
+fn weather_page_cycles_through_configured_cities() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings.weather_enabled=true;
+    h.app.settings.visible_pages[10]=true;
+    h.app.settings.weather_city="北京、上海、杭州".into();
+    h.app.weather_city_index=0;
+    h.app.weather_event(crate::weather::Event::Loaded(sample_weather()));
+    h.app.show_page(10);
+    h.hover(Pos2::new(WIN_W/2.0,12.0),1.0);
+    for _ in 0..40 {h.frame(vec![]);}
+    let contains=|h:&H,text:&str|h.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.text().contains(text)));
+    assert!(contains(&h,"1/3"),"应显示城市序号");
+    h.t+=0.5;
+    h.click(H::local(90.0,104.0));
+    for _ in 0..6 {h.frame(vec![]);}
+    assert_eq!(h.app.weather_city_index,1,"点击城市名应切到下一个城市");
+    assert_eq!(h.app.weather_selected_city(),"上海");
+    assert!(contains(&h,"2/3"));
+    assert!(h.app.weather.loading,"切换城市后应进入加载状态");
+}
+
+#[test]
 fn process_page_renders_top_processes_and_opens_task_manager() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();

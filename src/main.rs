@@ -1176,7 +1176,7 @@ impl eframe::App for Shell {
             self.cal_sig=(cal,auto_sync);
         }
         while let Some(ev)=self.cal.try_recv(){self.app.calendar_event(ev);}
-        let weather_cfg=(self.app.settings.weather_enabled,self.app.settings.weather_city.clone(),self.app.settings.weather_refresh_minutes);
+        let weather_cfg=(self.app.settings.weather_enabled,self.app.weather_selected_city(),self.app.settings.weather_refresh_minutes);
         if weather_cfg!=self.weather_sig {
             self.weather.configure(weather_cfg.0,weather_cfg.1.clone(),weather_cfg.2);
             self.weather_sig=weather_cfg;

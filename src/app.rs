@@ -708,6 +708,8 @@ pub struct App {
     pub(crate) processes: crate::processes::Snapshot,
     /// 进程页排序方式（CPU / 内存）。
     pub(crate) process_sort: crate::processes::ProcessSort,
+    /// 天气多城市列表里当前选中的下标（会话内）。
+    pub(crate) weather_city_index: usize,
     /// 天气页右侧卡片：`true` 显示多日预报，`false` 显示逐小时。
     pub(crate) weather_days: bool,
     /// 最近一帧系统音频频谱。
@@ -817,6 +819,7 @@ impl App {
             weather: WeatherState::default(),
             processes: crate::processes::Snapshot::default(),
             process_sort: crate::processes::ProcessSort::default(),
+            weather_city_index: 0,
             spectrum: crate::audio::Spectrum::default(),
             spectrum_at: -10.0,
             weather_days: false,
@@ -1419,6 +1422,33 @@ impl App {
         }
     }
 
+    /// 设置里配置的城市列表；为空时回退到默认城市。
+    pub fn weather_cities(&self) -> Vec<String> {
+        let cities = crate::weather::parse_cities(&self.settings.weather_city);
+        if cities.is_empty() {
+            vec![crate::weather::DEFAULT_CITY.to_string()]
+        } else {
+            cities
+        }
+    }
+
+    pub fn weather_selected_city(&self) -> String {
+        let cities = self.weather_cities();
+        let index = self.weather_city_index % cities.len();
+        cities[index].clone()
+    }
+
+    /// 在城市列表中向前切换，并请求刷新。
+    pub fn weather_cycle_city(&mut self) {
+        let count = self.weather_cities().len();
+        if count <= 1 {
+            return;
+        }
+        self.weather_city_index = (self.weather_city_index + 1) % count;
+        self.weather.loading = true;
+        self.weather.error = None;
+    }
+
     pub fn request_weather_refresh(&mut self) {
         self.weather.loading = true;
         self.pending.push(Cmd::WeatherRefresh);
@@ -1433,6 +1463,8 @@ impl App {
     /// 录制/截图用的天气样例数据。
     #[cfg(feature = "record")]
     pub fn weather_demo(&mut self) {
+        self.settings.weather_city = "北京、上海、杭州".into();
+        self.weather_city_index = 0;
         let now = {
             use chrono::TimeZone;
             chrono::Local::now()

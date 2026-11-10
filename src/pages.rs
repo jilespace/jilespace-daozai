@@ -1015,7 +1015,20 @@ impl App {
         } else {
             format!("{} · {} 更新", w.city, updated)
         };
+        let cities = self.weather_cities();
+        let city_count = cities.len();
+        let city_index = self.weather_city_index % city_count;
+        let status = if city_count > 1 {
+            format!("{status} · {}/{}", city_index + 1, city_count)
+        } else {
+            status
+        };
         c.text(44.0, 109.0, &c.fit(&status, 9.5, W::Regular, 160.0), 9.5, W::Regular, Color32::from_gray(155), H::Left);
+        let next_city = if city_count > 1 {
+            Some(cities[(city_index + 1) % city_count].clone())
+        } else {
+            None
+        };
         let mut meta = Vec::new();
         if let Some(humidity) = w.humidity {
             meta.push(format!("湿度 {humidity}%"));
@@ -1054,6 +1067,17 @@ impl App {
         }
         if c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text(refresh_hint).clicked() {
             self.request_weather_refresh();
+        }
+        if let Some(next_city) = next_city {
+            // 城市点击必须最后登记，才能盖住整块刷新命中并优先响应。
+            let hit = c.hit(44.0, 100.0, 160.0, 17.0, "weather-city").on_hover_text(format!(
+                "点击切换到 {next_city}（{} / {}）",
+                city_index + 1,
+                city_count
+            ));
+            if hit.clicked() {
+                self.weather_cycle_city();
+            }
         }
         if has_card {
             // 卡片整块的悬停提示先登记，模式切换按钮再盖在它上面，避免吞掉点击。

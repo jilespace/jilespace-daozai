@@ -938,7 +938,7 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.settings.weather_city)
-                            .hint_text("北京")
+                            .hint_text("北京、上海、杭州")
                             .desired_width(150.0)
                             .font(egui::FontId::proportional(12.5)),
                     );
@@ -946,7 +946,7 @@ impl App {
             });
             ui.add_space(3.0);
             ui.label(
-                egui::RichText::new("支持中文或英文城市名，例如 北京、上海、杭州、Tokyo、New York。")
+                egui::RichText::new("可填多个城市（用逗号或顿号分隔，最多 5 个），点击天气页城市名切换；支持中英文城市名。")
                     .size(11.0)
                     .color(muted),
             );
