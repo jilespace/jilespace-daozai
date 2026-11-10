@@ -1251,8 +1251,15 @@ impl App {
                     let selected=(start..=end).contains(&self.settings_tab);
                     let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),36.0),egui::Sense::click());
                     if response.clicked() && !selected{self.settings_tab=target;}
-                    if selected || response.hovered(){
-                        ui.painter().rect_filled(rect,7.0,if selected{settings_color(ctx,Color32::from_rgb(43,43,46),Color32::from_rgb(214,221,232))}else{settings_color(ctx,Color32::from_rgb(30,30,33),Color32::from_rgb(225,230,238))});
+                    if selected {
+                        ui.painter().rect_filled(rect,7.0,settings_color(ctx,Color32::from_rgb(43,43,46),Color32::from_rgb(214,221,232)));
+                    } else {
+                        let hover=ctx.animate_bool_with_time(egui::Id::new(("settings-sidebar-hover",name)),response.hovered(),0.10);
+                        if hover>0.01 {
+                            let fill=settings_color(ctx,Color32::from_rgb(30,30,33),Color32::from_rgb(225,230,238));
+                            ui.painter().rect_filled(rect,7.0,Color32::from_rgba_unmultiplied(fill.r(),fill.g(),fill.b(),(hover*255.0) as u8));
+                        }
+                        if hover<0.99 {ctx.request_repaint();}
                     }
                     let icon=match start {
                         0=>egui::include_image!("../assets/settings-icons/system/general.svg"),

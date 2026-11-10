@@ -292,9 +292,32 @@ impl App {
         let day=self.calendar.view.day;
         let heading=format!("{} · {}月{}日",if day==today{"今天"}else{["周一","周二","周三","周四","周五","周六","周日"][day.weekday().num_days_from_monday() as usize]},day.month(),day.day());
         c.text(167.0,44.0,&heading,8.8,W::Semibold,accent,H::Left);
-        let status=if self.calendar.view.loading{"同步中".to_string()}else if !self.calendar.view.error.is_empty(){"重试同步".to_string()}else {let at=self.calendar.feeds.iter().map(|feed|feed.last_sync.as_str()).max().unwrap_or(&self.calendar.last_sync);if at.is_empty(){"".into()}else{format!("{} 更新",at.split_whitespace().last().unwrap_or(""))}};
-        c.text(376.0,44.0,&status,7.4,W::Regular,muted,H::Right);
-        if !self.calendar_configs().is_empty() && !self.calendar.view.loading && c.hit(326.0,33.0,52.0,15.0,"calendar-sync").on_hover_text("同步这个月份").clicked(){self.request_calendar_month(true);}
+        let error = self.calendar.view.error.clone();
+        let status=if self.calendar.view.loading{"同步中".to_string()}else if !error.is_empty(){"重试同步".to_string()}else {let at=self.calendar.feeds.iter().map(|feed|feed.last_sync.as_str()).max().unwrap_or(&self.calendar.last_sync);if at.is_empty(){"".into()}else{format!("{} 更新",at.split_whitespace().last().unwrap_or(""))}};
+        let sync_hit = if !self.calendar_configs().is_empty() && !self.calendar.view.loading {
+            Some(c.hit(324.0, 32.0, 54.0, 17.0, "calendar-sync").on_hover_text(if error.is_empty() {
+                "同步这个月份".to_string()
+            } else {
+                format!("同步失败：{error}\n点击重新同步这个月份")
+            }))
+        } else {
+            None
+        };
+        if sync_hit.as_ref().is_some_and(|hit| hit.hovered()) {
+            c.fill(324.0, 32.0, 54.0, 17.0, 8.0, Color32::from_white_alpha(12));
+        }
+        c.text(
+            376.0,
+            44.0,
+            &status,
+            if error.is_empty() { 7.4 } else { 8.2 },
+            if error.is_empty() { W::Regular } else { W::Semibold },
+            if error.is_empty() { muted } else { Color32::from_rgb(235, 176, 96) },
+            H::Right,
+        );
+        if sync_hit.is_some_and(|hit| hit.clicked()) {
+            self.request_calendar_month(true);
+        }
         let focus=self.calendar.view.focus.clone();
         let scroll_to_focus=if c.live{std::mem::take(&mut self.calendar.view.scroll_to_focus)}else{false};
         let mut first=self.calendar.view.first;

@@ -1979,6 +1979,19 @@ fn mail_page_shows_code_and_copies_on_click() {
 }
 
 #[test]
+fn calendar_page_highlights_sync_failure_with_retry() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut h = H::new();
+    h.app.show_page(crate::app::CALENDAR_PAGE);
+    h.app.calendar.view.loading = false;
+    h.app.calendar.view.error = "连不上服务器，检查网络".into();
+    h.hover(Pos2::new(WIN_W/2.0,12.0),0.6);
+    for _ in 0..40 {h.frame(vec![]);}
+    let contains=|h:&H,text:&str|h.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.text().contains(text)));
+    assert!(contains(&h,"重试同步"),"日历同步失败时应显示重试入口");
+}
+
+#[test]
 fn mail_page_shows_retry_when_connection_fails() {
     let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut h = H::new();
