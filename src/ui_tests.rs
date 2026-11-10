@@ -3769,6 +3769,70 @@ fn page_order_drag_applies_on_release_and_saves() {
 }
 
 #[test]
+fn settings_search_filters_tabs_and_reports_no_match() {
+    let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut h=H::new();
+    h.app.settings_tab=0;
+    h.app.open_settings();
+    h.ctx.set_embed_viewports(false);
+    h.app.settings_query="天气".into();
+    assert_eq!(h.app.apply_settings_query(),vec![14]);
+    assert_eq!(h.app.settings_tab,14);
+    h.app.settings_query="不存在xyz".into();
+    assert!(h.app.apply_settings_query().is_empty());
+    assert_eq!(h.app.settings_tab,14,"无匹配时不应跳走");
+    let output=std::sync::Arc::new(std::sync::Mutex::new(None));
+    let capture=output.clone();
+    egui::Context::set_immediate_viewport_renderer(move|ctx,mut viewport|{
+        let id=viewport.ids.this;
+        let raw=egui::RawInput{viewport_id:id,screen_rect:Some(Rect::from_min_size(Pos2::ZERO,egui::vec2(690.0,560.0))),
+            viewports:std::iter::once((id,egui::ViewportInfo{native_pixels_per_point:Some(1.0),..Default::default()})).collect(),..Default::default()};
+        *capture.lock().unwrap()=Some(ctx.run(raw,|ctx|(viewport.viewport_ui_cb)(ctx)));
+    });
+    let mut texts=Vec::new();
+    let mut root_textures=Vec::new();
+    let mut child_textures=Vec::new();
+    for _ in 0..3 {
+        let root=h.ctx.run(egui::RawInput::default(),|ctx|h.app.settings_ui(ctx,false));
+        root_textures.push(root.textures_delta.clone());
+        if let Some(child)=output.lock().unwrap().take(){
+            child_textures.push(child.textures_delta.clone());
+            fn collect(shape:&egui::Shape,out:&mut Vec<String>){
+                match shape {
+                    egui::Shape::Text(text)=>out.push(text.galley.text().to_string()),
+                    egui::Shape::Vec(items)=>for item in items{collect(item,out);},
+                    _=>{}
+                }
+            }
+            for clipped in &child.shapes {collect(&clipped.shape,&mut texts);}
+        }
+    }
+    assert!(texts.iter().any(|text|text.contains("没有匹配的设置")),"无结果时应给出提示，实际 {texts:?}");
+    assert!(texts.iter().any(|text|text.contains("清除搜索")));
+    assert!(!texts.iter().any(|text|text=="音乐与歌词"),"搜索时侧栏应隐藏无关分组");
+    // 搜索命中状态截图（用于回归核对）。
+    h.app.settings_query="天气".into();
+    h.app.apply_settings_query();
+    let root=h.ctx.run(egui::RawInput::default(),|ctx|h.app.settings_ui(ctx,false));
+    let child=output.lock().unwrap().take().expect("设置页子视口应已渲染");
+    if let Some(dest)=std::env::var_os("DAOZAI_SETTINGS_PREVIEW_DIR").filter(|value|!value.is_empty()) {
+        let dest=std::path::PathBuf::from(dest);
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut raster=crate::preview_raster::Raster::new(690,560);
+        for delta in root_textures.iter().chain(child_textures.iter()).chain(std::iter::once(&root.textures_delta)).chain(std::iter::once(&child.textures_delta)) {
+            raster.update_textures(delta);
+        }
+        raster.buf.fill([0.0,0.0,0.0,1.0]);
+        raster.draw(&h.ctx.tessellate(child.shapes,child.pixels_per_point),child.pixels_per_point);
+        let mut rgba=Vec::new();
+        raster.to_rgba8(&mut rgba);
+        image::save_buffer(dest.join("settings-search.png"),&rgba,690,560,image::ColorType::Rgba8).unwrap();
+    }
+    h.app.settings_query.clear();
+    assert_eq!(h.app.apply_settings_query().len(),15);
+}
+
+#[test]
 fn settings_theme_follows_system_and_preserves_island_style() {
     use crate::settings_theme::SettingsTheme;
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());

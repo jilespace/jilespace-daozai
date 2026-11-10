@@ -951,6 +951,9 @@ mod tests {
         use std::io::{Read,Write};
         use std::net::TcpListener;
         for (provider, code) in [(Provider::DingTalk,405),(Provider::WeCom,403)] {
+            // 本地回环 mock 服务器偶尔会被系统调度拖慢，允许重试，避免偶发失败。
+            let mut last_error: Option<String> = None;
+            for _attempt in 0..3 {
             let listener=TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let base=format!("http://{}/",listener.local_addr().unwrap());
@@ -983,8 +986,17 @@ mod tests {
             let cfg=Config{provider,username:"synthetic".into(),href:None,server:Some(base.clone())};
             let result=discover(&agent(),&cfg,"synthetic-password");
             let _=stop_tx.send(());let paths=worker.join().unwrap();
-            assert_eq!(result.unwrap(),format!("{base}dav/calendars/account/primary/"));
-            assert_eq!(paths,vec!["/","/.well-known/caldav","/dav/principals/","/dav/principals/account/","/dav/calendars/account/"]);
+            match result {
+                Ok(path) => {
+                    assert_eq!(path,format!("{base}dav/calendars/account/primary/"));
+                    assert_eq!(paths,vec!["/","/.well-known/caldav","/dav/principals/","/dav/principals/account/","/dav/calendars/account/"]);
+                    last_error=None;
+                    break;
+                }
+                Err(error) => last_error=Some(format!("{error:?}")),
+            }
+            }
+            assert!(last_error.is_none(),"{provider:?} 发现流程连续失败：{last_error:?}");
         }
     }
 

@@ -509,6 +509,16 @@ mod tests {
     }
 
     #[test]
+    fn settings_search_matches_titles_and_keywords() {
+        assert_eq!(settings_matches("天气"), vec![14]);
+        assert!(settings_matches("城市").contains(&14), "关键词应能定位天气");
+        assert!(settings_matches("热键").contains(&0), "关键词应能定位常规");
+        assert!(settings_matches("免打扰").contains(&6));
+        assert_eq!(settings_matches("").len(), 15);
+        assert!(settings_matches("不存在的设置").is_empty());
+    }
+
+    #[test]
     fn settings_groups_keep_every_page_reachable() {
         let groups = ["常规", "音乐与歌词", "专注与饮水", "专注与饮水", "待办与置物", "待办与置物", "通知、邮箱与日程", "通知、邮箱与日程", "通知、邮箱与日程", "关于", "页面管理", "AI 额度", "剪贴板"];
         for (tab, expected) in groups.iter().enumerate() {
@@ -774,6 +784,39 @@ fn setting_choices(ui:&mut egui::Ui,title:&str,value:&mut u32,values:[u32;3],uni
         });
     });
 }
+const SETTINGS_TITLES: [&str; 15] = ["常规", "音乐与歌词", "专注", "饮水", "待办", "置物", "通知", "邮箱", "日程", "关于", "页面管理", "AI 额度", "剪贴板", "岛体外观", "天气"];
+const SETTINGS_KEYWORDS: [&str; 15] = [
+    "启动 动画 快捷键 热键 外观 主题",
+    "播放器 歌词 音乐 同步",
+    "番茄 专注 计时",
+    "喝水 饮水 提醒",
+    "任务 待办",
+    "文件 置物架 架子",
+    "提醒 免打扰 通知 横幅",
+    "邮件 邮箱",
+    "日历 会议 日程",
+    "版本 关于 更新",
+    "页面 显示 顺序 管理",
+    "额度 账号 用量",
+    "复制 剪贴板 历史",
+    "透明 圆角 动效 主题 外观",
+    "城市 天气 空气质量 预报",
+];
+
+pub(crate) fn settings_matches(query: &str) -> Vec<usize> {
+    (0..15).filter(|index| settings_tab_matches(*index, query)).collect()
+}
+
+fn settings_tab_matches(index: usize, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    let title = SETTINGS_TITLES.get(index).copied().unwrap_or("");
+    let keywords = SETTINGS_KEYWORDS.get(index).copied().unwrap_or("");
+    title.to_lowercase().contains(&query) || keywords.to_lowercase().contains(&query)
+}
+
 const SETTINGS_GROUPS: [(&str,usize,usize);11] = [
     ("常规",0,0), ("岛体外观",13,13), ("页面管理",10,10), ("音乐与歌词",1,1), ("专注与饮水",2,3),
     ("待办与置物",4,5), ("通知、邮箱与日程",6,8), ("天气",14,14), ("AI 额度",11,11),
@@ -1148,12 +1191,36 @@ impl App {
             egui::SidePanel::left("settings-sidebar").resizable(false).exact_width(180.0).frame(egui::Frame::new().fill(settings_color(ctx,Color32::from_rgb(29,29,32),Color32::from_rgb(237,239,243))).stroke(egui::Stroke::new(1.0_f32,settings_color(ctx,Color32::from_rgb(42,42,45),Color32::from_rgb(216,219,225)))).inner_margin(egui::Margin::symmetric(10,12))).show(ctx,|ui|{
                 ui.add_space(5.0);
                 ui.label(egui::RichText::new("设置").size(11.0).color(settings_color(ctx,Color32::from_gray(150),Color32::from_gray(105))));
-                ui.add_space(7.0);
+                ui.add_space(6.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings_query)
+                        .hint_text("搜索设置…")
+                        .desired_width(ui.available_width())
+                        .font(egui::FontId::proportional(12.0)),
+                );
+                ui.add_space(6.0);
+                let query = self.settings_query.trim().to_lowercase();
+                let matched = self.apply_settings_query();
+                if matched.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new("没有匹配的设置").size(11.5).color(settings_color(ctx,Color32::from_gray(150),Color32::from_gray(110))));
+                    if ui.button(egui::RichText::new("清除搜索").size(11.0)).clicked() {
+                        self.settings_query.clear();
+                    }
+                }
                 for (name,start,end) in SETTINGS_GROUPS {
+                    let target = if query.is_empty() {
+                        start
+                    } else {
+                        match (start..=end).find(|index| matched.contains(index)) {
+                            Some(index) => index,
+                            None => continue,
+                        }
+                    };
                     if start==9 {ui.add_space((ui.available_height()-38.0).max(0.0));}
                     let selected=(start..=end).contains(&self.settings_tab);
                     let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),36.0),egui::Sense::click());
-                    if response.clicked() && !selected{self.settings_tab=start;}
+                    if response.clicked() && !selected{self.settings_tab=target;}
                     if selected || response.hovered(){
                         ui.painter().rect_filled(rect,7.0,if selected{settings_color(ctx,Color32::from_rgb(43,43,46),Color32::from_rgb(214,221,232))}else{settings_color(ctx,Color32::from_rgb(30,30,33),Color32::from_rgb(225,230,238))});
                     }
@@ -1188,7 +1255,7 @@ impl App {
                 ui.visuals_mut().widgets.hovered.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().widgets.active.corner_radius=egui::CornerRadius::same(6);
                 ui.visuals_mut().selection.bg_fill=settings_color(ctx,Color32::from_rgb(45,105,165),Color32::from_rgb(209,226,248));
-                let titles=["常规","音乐与歌词","专注","饮水","待办","置物","通知","邮箱","日程","关于","页面管理","AI 额度","剪贴板","岛体外观","天气"];
+                let titles = SETTINGS_TITLES;
                 ui.label(egui::RichText::new(titles[self.settings_tab.min(14)]).size(18.0).strong().color(settings_color(ctx,Color32::WHITE,Color32::from_rgb(30,34,41))));
                 if let Some((_,start,end))=SETTINGS_GROUPS.iter().find(|(_,start,end)|(*start..=*end).contains(&self.settings_tab)) {
                     if start!=end {
