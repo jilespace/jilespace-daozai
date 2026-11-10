@@ -1536,7 +1536,7 @@ mod tests {
     use super::*;
 
     fn item(id: &str, text: &str, at: i64) -> Item {
-        Item { id: id.into(), text: text.into(), copied_at: at, pinned: false }
+        Item { id: id.into(), text: text.into(), copied_at: at, pinned: false, image: None }
     }
 
     fn pinned(mut item: Item) -> Item {

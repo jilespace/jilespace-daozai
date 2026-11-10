@@ -121,7 +121,7 @@ fn write_bgra_bottom_up(image: &crate::ocr::Image, out: &mut [u8]) {
 
 /// 把图片写入系统剪贴板：优先 CF_DIBV5，同时提供 CF_DIB 与注册的 PNG 格式。
 #[cfg(windows)]
-pub fn copy_to_clipboard(image: &crate::ocr::Image) {
+pub fn copy_to_clipboard(image: &crate::ocr::Image) -> bool {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Foundation::{HANDLE, HWND};
     use windows::Win32::System::DataExchange::{
@@ -131,7 +131,7 @@ pub fn copy_to_clipboard(image: &crate::ocr::Image) {
     use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5};
     unsafe {
         if OpenClipboard(HWND::default()).is_err() {
-            return;
+            return false;
         }
         let _ = EmptyClipboard();
         let set = |format: u32, data: &[u8]| -> bool {
@@ -146,17 +146,23 @@ pub fn copy_to_clipboard(image: &crate::ocr::Image) {
             let _ = GlobalUnlock(handle);
             SetClipboardData(format, HANDLE(handle.0)).is_ok()
         };
-        set(CF_DIBV5.0 as u32, &dibv5(image));
-        set(CF_DIB.0 as u32, &dib32(image));
+        let mut ok = set(CF_DIBV5.0 as u32, &dibv5(image));
+        ok |= set(CF_DIB.0 as u32, &dib32(image));
         if let Ok(png) = encode_png(image) {
             let name = HSTRING::from("PNG");
             let format = RegisterClipboardFormatW(PCWSTR(name.as_ptr()));
             if format != 0 {
-                set(format, &png);
+                ok |= set(format, &png);
             }
         }
         let _ = CloseClipboard();
+        ok
     }
+}
+
+#[cfg(not(windows))]
+pub fn copy_to_clipboard(_image: &crate::ocr::Image) -> bool {
+    false
 }
 
 #[cfg(test)]

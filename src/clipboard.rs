@@ -5,6 +5,16 @@ pub const MAX_TOTAL_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_LIMIT: usize = 200;
 pub const DEFAULT_DAYS: u32 = 7;
 pub const HOTKEY_TEXT: &str = "Ctrl+Alt+V";
+/// 图片历史最多保留的张数（置顶项不计入裁剪）。
+pub const MAX_IMAGE_ITEMS: usize = 24;
+pub const IMAGE_DIR: &str = "clipboard-images";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageRef {
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
@@ -12,6 +22,14 @@ pub struct Item {
     pub text: String,
     pub copied_at: i64,
     pub pinned: bool,
+    /// 图片条目：加密文件 key 与原始尺寸；文本条目为 None。
+    pub image: Option<ImageRef>,
+}
+
+impl Item {
+    pub fn is_image(&self) -> bool {
+        self.image.is_some()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -58,9 +76,28 @@ impl History {
                 text,
                 copied_at: now,
                 pinned: false,
+                image: None,
             },
         };
         item.copied_at = now;
+        self.items.insert(0, item);
+        self.cleanup(now);
+        true
+    }
+
+    /// 记录一张图片；相同图片（key 相同）去重并置顶。
+    pub fn insert_image(&mut self, image: ImageRef, now: i64) -> bool {
+        if image.key.is_empty() || image.width == 0 || image.height == 0 {
+            return false;
+        }
+        let text = format!("图片 {}×{}", image.width, image.height);
+        let id = image.key.clone();
+        let mut item = match self.items.iter().position(|item| item.id == id) {
+            Some(position) => self.items.remove(position),
+            None => Item { id, text, copied_at: now, pinned: false, image: Some(image.clone()) },
+        };
+        item.copied_at = now;
+        item.image = Some(image);
         self.items.insert(0, item);
         self.cleanup(now);
         true
@@ -118,6 +155,16 @@ impl History {
             }
         });
 
+        let mut images = 0usize;
+        self.items.retain(|item| {
+            if item.pinned || item.image.is_none() {
+                true
+            } else {
+                images += 1;
+                images <= MAX_IMAGE_ITEMS
+            }
+        });
+
         self.order();
     }
 
@@ -147,6 +194,11 @@ impl History {
                     "text": item.text,
                     "copied_at": item.copied_at,
                     "pinned": item.pinned,
+                    "image": item.image.as_ref().map(|image| serde_json::json!({
+                        "key": image.key,
+                        "width": image.width,
+                        "height": image.height,
+                    })),
                 })
             })
             .collect();
@@ -175,6 +227,13 @@ impl History {
                 text: text.to_string(),
                 copied_at: item["copied_at"].as_i64().unwrap_or(0),
                 pinned: item["pinned"].as_bool().unwrap_or(false),
+                image: item.get("image").and_then(|image| {
+                    Some(ImageRef {
+                        key: image.get("key")?.as_str()?.to_string(),
+                        width: image.get("width")?.as_u64()?.min(u32::MAX as u64) as u32,
+                        height: image.get("height")?.as_u64()?.min(u32::MAX as u64) as u32,
+                    })
+                }),
             });
         }
         history.cleanup(now);
@@ -500,6 +559,76 @@ pub fn write_clipboard(_text: &str) -> bool {
     false
 }
 
+pub fn images_dir() -> std::path::PathBuf {
+    crate::model::config_dir().join(IMAGE_DIR)
+}
+
+fn image_path(root: &std::path::Path, key: &str) -> std::path::PathBuf {
+    root.join(format!("{key}.bin"))
+}
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for byte in bytes {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
+/// 把图片编码为 PNG、用 DPAPI 加密后写入历史图片目录。
+pub fn store_image(image: &crate::ocr::Image) -> Result<ImageRef, String> {
+    let png = crate::screenshot::encode_png(image)?;
+    let key = format!("img-{:08x}-{}x{}", fnv1a(&png), image.width, image.height);
+    let root = images_dir();
+    std::fs::create_dir_all(&root).map_err(|error| format!("无法创建图片历史目录：{error}"))?;
+    let protected = protect(&png)?;
+    let mut body = b"DPAPI".to_vec();
+    body.extend_from_slice(&protected);
+    crate::model::atomic_write(&image_path(&root, &key), &body)
+        .map_err(|error| format!("无法保存图片历史：{error}"))?;
+    Ok(ImageRef { key, width: image.width, height: image.height })
+}
+
+pub fn load_image(image: &ImageRef) -> Option<crate::ocr::Image> {
+    let bytes = std::fs::read(image_path(&images_dir(), &image.key)).ok()?;
+    let protected = bytes.strip_prefix(b"DPAPI")?;
+    let png = unprotect(protected).ok()?;
+    crate::ocr::decode_png(&png).ok()
+}
+
+pub fn remove_image(key: &str) {
+    let _ = std::fs::remove_file(image_path(&images_dir(), key));
+}
+
+pub fn clear_images() {
+    let _ = std::fs::remove_dir_all(images_dir());
+}
+
+/// 删除不再被历史引用的图片文件（异常退出、清空后遗留）。
+pub fn prune_images(history: &History) {
+    let referenced: std::collections::HashSet<&str> = history
+        .items
+        .iter()
+        .filter_map(|item| item.image.as_ref().map(|image| image.key.as_str()))
+        .collect();
+    let root = images_dir();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("bin") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if !referenced.contains(stem) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
 pub fn history_path() -> std::path::PathBuf {
     crate::model::config_dir().join("clipboard.bin")
 }
@@ -645,6 +774,12 @@ pub trait Capture: Send + Sync {
     fn sequence(&self) -> u32;
     fn read(&self) -> Option<String>;
     fn write(&self, text: &str) -> bool;
+    fn read_image(&self) -> Option<crate::ocr::Image> {
+        None
+    }
+    fn write_image(&self, _image: &crate::ocr::Image) -> bool {
+        false
+    }
     fn own_process(&self) -> bool;
 }
 
@@ -661,6 +796,14 @@ impl Capture for SystemCapture {
 
     fn write(&self, text: &str) -> bool {
         write_clipboard(text)
+    }
+
+    fn read_image(&self) -> Option<crate::ocr::Image> {
+        crate::ocr::read_clipboard_image().ok()
+    }
+
+    fn write_image(&self, image: &crate::ocr::Image) -> bool {
+        crate::screenshot::copy_to_clipboard(image)
     }
 
     fn own_process(&self) -> bool {
@@ -754,6 +897,7 @@ fn supervisor(
     if let Some(status) = load_status {
         let _ = events.send(Event::Status(status));
     }
+    prune_images(&history);
     let _ = events.send(Event::Changed(std::sync::Arc::new(
         history.items().to_vec(),
     )));
@@ -785,21 +929,42 @@ fn supervisor(
                 )));
             }
             Ok(Cmd::Copy(id)) => {
-                if let Some(text) = history
-                    .items()
-                    .iter()
-                    .find(|item| item.id == id)
-                    .map(|item| item.text.clone())
-                {
-                    if capture.write(&text) {
-                        last_sequence = capture.sequence();
-                        let _ = events.send(Event::Copied(id));
-                    } else {
-                        let _ = events.send(Event::CopyFailed(id, "剪贴板正被占用，请重试".into()));
+                let item = history.items().iter().find(|item| item.id == id).cloned();
+                match item {
+                    Some(item) if item.is_image() => {
+                        let image = item.image.as_ref().and_then(load_image);
+                        match image {
+                            Some(image) if capture.write_image(&image) => {
+                                last_sequence = capture.sequence();
+                                let _ = events.send(Event::Copied(id));
+                            }
+                            Some(_) => {
+                                let _ = events.send(Event::CopyFailed(
+                                    id,
+                                    "剪贴板正被占用，请重试".into(),
+                                ));
+                            }
+                            None => {
+                                let _ = events.send(Event::CopyFailed(
+                                    id,
+                                    "图片已被清理，请重新复制".into(),
+                                ));
+                            }
+                        }
                     }
-                } else {
-                    let _ =
-                        events.send(Event::CopyFailed(id, "这条记录已被移除，请重新选择".into()));
+                    Some(item) => {
+                        if capture.write(&item.text) {
+                            last_sequence = capture.sequence();
+                            let _ = events.send(Event::Copied(id));
+                        } else {
+                            let _ =
+                                events.send(Event::CopyFailed(id, "剪贴板正被占用，请重试".into()));
+                        }
+                    }
+                    None => {
+                        let _ = events
+                            .send(Event::CopyFailed(id, "这条记录已被移除，请重新选择".into()));
+                    }
                 }
             }
             Ok(Cmd::Restore(item)) => {
@@ -839,6 +1004,7 @@ fn supervisor(
             }
             Ok(Cmd::Clear) => {
                 history.clear();
+                clear_images();
                 if let Err(error) = save(&history) {
                     let _ = events.send(Event::Status(error));
                 }
@@ -863,6 +1029,7 @@ fn supervisor(
             let sequence = capture.sequence();
             if sequence != last_sequence {
                 last_sequence = sequence;
+                let mut captured = false;
                 if let Some(mut text) = capture.read() {
                     if clean_links {
                         text = clean_tracking(&text);
@@ -873,12 +1040,33 @@ fn supervisor(
                         own_process: capture.own_process(),
                     };
                     if accepts(&raw) && history.insert(raw.text, now_seconds()) {
+                        captured = true;
                         if let Err(error) = save(&history) {
                             let _ = events.send(Event::Status(error));
                         }
                         let _ = events.send(Event::Changed(std::sync::Arc::new(
                             history.items().to_vec(),
                         )));
+                    }
+                }
+                // 图片剪贴板没有文本格式：优先按图片保存（自己写出的图片不再回录）。
+                if !captured && !capture.own_process() {
+                    if let Some(image) = capture.read_image() {
+                        match store_image(&image) {
+                            Ok(image_ref) => {
+                                if history.insert_image(image_ref, now_seconds()) {
+                                    if let Err(error) = save(&history) {
+                                        let _ = events.send(Event::Status(error));
+                                    }
+                                    let _ = events.send(Event::Changed(std::sync::Arc::new(
+                                        history.items().to_vec(),
+                                    )));
+                                }
+                            }
+                            Err(error) => {
+                                let _ = events.send(Event::Status(error));
+                            }
+                        }
                     }
                 }
             }
@@ -902,6 +1090,70 @@ mod tests {
 
     fn find<'a>(history: &'a History, text: &str) -> Option<&'a Item> {
         history.items().iter().find(|item| item.text == text)
+    }
+
+    #[test]
+    fn image_items_round_trip_and_are_capped() {
+        let mut history = History::new(200, 7);
+        for index in 0..30u32 {
+            assert!(history.insert_image(
+                ImageRef { key: format!("img-{index}"), width: 100 + index, height: 50 },
+                100
+            ));
+        }
+        assert_eq!(
+            history.items().iter().filter(|item| item.is_image()).count(),
+            MAX_IMAGE_ITEMS,
+            "图片条目应受数量上限约束"
+        );
+        assert!(history.items()[0].text.starts_with("图片 "));
+        let json = history.to_json();
+        let loaded = History::from_json(&json, 200, 7, 100).unwrap();
+        assert_eq!(loaded.items().len(), history.items().len());
+        assert!(loaded.items().iter().any(|item| item.image.is_some()));
+        // 相同 key 的图片去重并置顶。
+        let mut history = History::new(20, 7);
+        history.insert_image(ImageRef { key: "same".into(), width: 10, height: 10 }, 1);
+        history.insert("文本".into(), 2);
+        history.insert_image(ImageRef { key: "same".into(), width: 10, height: 10 }, 3);
+        assert_eq!(history.items().iter().filter(|item| item.id == "same").count(), 1);
+        assert_eq!(history.items()[0].id, "same");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn service_captures_and_copies_clipboard_images() {
+        let _dir = test_history_dir();
+        let capture = Arc::new(FakeCapture::new());
+        let service = Service::start_with(capture.clone());
+        service.set_enabled(true);
+        let _ = next_event(&service, Duration::from_secs(1));
+        capture.set_image(crate::ocr::Image {
+            width: 4,
+            height: 3,
+            rgba: (0..4 * 3 * 4).map(|value| (value * 11) as u8).collect(),
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let item = loop {
+            if let Event::Changed(items) = next_event(&service, Duration::from_millis(700)) {
+                if let Some(item) = items.iter().find(|item| item.is_image()) {
+                    break item.clone();
+                }
+            }
+            assert!(Instant::now() < deadline, "图片没有进入剪贴板历史");
+        };
+        assert_eq!(item.text, "图片 4×3");
+        assert!(std::fs::read_dir(images_dir()).unwrap().next().is_some());
+        service.copy(&item.id);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match next_event(&service, Duration::from_millis(700)) {
+                Event::Copied(id) if id == item.id => break,
+                _ if Instant::now() > deadline => panic!("复制图片没有回执"),
+                _ => {}
+            }
+        }
+        assert_eq!(*capture.written_images.lock().unwrap(), vec![(4, 3)]);
     }
 
     #[test]
@@ -1115,7 +1367,9 @@ mod tests {
     struct FakeCapture {
         sequence: AtomicU32,
         text: Mutex<Option<String>>,
+        image: Mutex<Option<crate::ocr::Image>>,
         written: Mutex<Vec<String>>,
+        written_images: Mutex<Vec<(u32, u32)>>,
     }
 
     impl FakeCapture {
@@ -1123,12 +1377,21 @@ mod tests {
             Self {
                 sequence: AtomicU32::new(1),
                 text: Mutex::new(None),
+                image: Mutex::new(None),
                 written: Mutex::new(Vec::new()),
+                written_images: Mutex::new(Vec::new()),
             }
         }
 
         fn set(&self, text: &str) {
             *self.text.lock().unwrap() = Some(text.into());
+            *self.image.lock().unwrap() = None;
+            self.sequence.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn set_image(&self, image: crate::ocr::Image) {
+            *self.text.lock().unwrap() = Some(String::new());
+            *self.image.lock().unwrap() = Some(image);
             self.sequence.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -1144,6 +1407,16 @@ mod tests {
 
         fn write(&self, text: &str) -> bool {
             self.written.lock().unwrap().push(text.into());
+            self.sequence.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+
+        fn read_image(&self) -> Option<crate::ocr::Image> {
+            self.image.lock().unwrap().clone()
+        }
+
+        fn write_image(&self, image: &crate::ocr::Image) -> bool {
+            self.written_images.lock().unwrap().push((image.width, image.height));
             self.sequence.fetch_add(1, Ordering::Relaxed);
             true
         }
