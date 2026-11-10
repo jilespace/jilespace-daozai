@@ -570,6 +570,15 @@ impl SystemPageState {
     }
 }
 
+/// 系统 HUD 透明度步进：关闭动画时直接落到目标值。
+pub(crate) fn hud_alpha_step(current: f32, target: f32, dt: f32, motion: bool, rising: bool) -> f32 {
+    if motion {
+        crate::anim::approach(current, target, if rising { 16.0 } else { 8.0 }, dt)
+    } else {
+        target
+    }
+}
+
 pub struct App {
     pub opts: Options,
     pub settings: model::Settings,
@@ -1801,11 +1810,14 @@ impl App {
         let hud_active=self.notice.clone();
         if hud_active.as_ref().map(|a|&a.title)!=self.hud_notice.as_ref().map(|a|&a.title)||hud_active.is_none(){self.notice_details=false;}
         if let Some(a)=&hud_active {self.hud_notice=Some(a.clone());}
-        self.hud_alpha=anim::approach(self.hud_alpha,if hud_active.is_some(){1.0}else{0.0},if hud_active.is_some(){16.0}else{8.0},dt);
+        let hud_target=if hud_active.is_some(){1.0}else{0.0};
+        self.hud_alpha=hud_alpha_step(self.hud_alpha,hud_target,dt,crate::bar_layout::animations_enabled(),hud_active.is_some());
         if hud_active.is_none() && self.hud_alpha<0.003 {self.hud_notice=None;}
         let notice_target=if self.compact_notices()&&(self.notice.is_some()||self.t<self.notification_bell_until) {44.0}else{0.0};
         self.notice_width.target=notice_target;
-        if self.compact_notices(){self.notice_width.step(dt);}else{self.notice_width.snap(0.0);self.notice_details=false;}
+        if self.compact_notices(){
+            if crate::bar_layout::animations_enabled(){self.notice_width.step(dt);}else{self.notice_width.snap(notice_target);}
+        }else{self.notice_width.snap(0.0);self.notice_details=false;}
         self.update_media(env,&ctx);
         let bell=self.t<self.notification_bell_until&&!self.compact_notices();
         self.resident_power=(env.battery,env.charging);

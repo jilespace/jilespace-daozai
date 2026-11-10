@@ -22,7 +22,7 @@ const PAD: f32 = 10.0;
 const INNER: f32 = 16.0;
 const FOOTER_H: f32 = 40.0;
 const ROW_H: f32 = 48.0;
-const FADE_SECS: f64 = 0.12;
+const FADE_SECS: f64 = 0.13;
 const MAX_RESULTS: usize = 40;
 const MAX_APPS: usize = 400;
 const APP_CACHE: Duration = Duration::from_secs(300);
@@ -804,10 +804,7 @@ impl Panel {
                 self.shown = true;
             }
             let now = ctx.input(|input| input.time);
-            let shown_at = *self.shown_at.get_or_insert(now);
-            let progress = ((now - shown_at) / FADE_SECS).clamp(0.0, 1.0) as f32;
-            self.fade = if progress >= 1.0 { 1.0 } else { crate::anim::ease_out_cubic(progress) };
-            if progress < 1.0 {
+            if self.update_fade(now, crate::bar_layout::animations_enabled()) {
                 ctx.request_repaint();
             }
             if ctx.input(|input| input.viewport().close_requested()) {
@@ -836,6 +833,18 @@ impl Panel {
         }
         let lost = *self.focus_lost_at.get_or_insert(Instant::now());
         Instant::now().duration_since(lost) >= Duration::from_millis(100)
+    }
+
+    /// 更新入场淡入；关闭动效时直接显示完整面板。返回是否还需要继续刷新。
+    fn update_fade(&mut self, now: f64, motion: bool) -> bool {
+        if !motion {
+            self.fade = 1.0;
+            return false;
+        }
+        let shown_at = *self.shown_at.get_or_insert(now);
+        let progress = ((now - shown_at) / FADE_SECS).clamp(0.0, 1.0) as f32;
+        self.fade = if progress >= 1.0 { 1.0 } else { crate::anim::ease_out_cubic(progress) };
+        progress < 1.0
     }
 
     /// 无窗口渲染入口：录制器与测试不需要真的创建窗口也能画同一份界面。
@@ -1948,6 +1957,16 @@ fn convert_units(query: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_motion_skips_palette_fade() {
+        let mut palette = Panel::default();
+        palette.open(&snapshot());
+        palette.shown_at = Some(0.0);
+        palette.fade = 0.0;
+        assert!(!palette.update_fade(0.01, false));
+        assert_eq!(palette.fade, 1.0);
+    }
 
     fn page(index: usize, name: &'static str, description: &'static str) -> PageInfo {
         PageInfo { index, name, description }

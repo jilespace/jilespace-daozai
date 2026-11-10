@@ -249,6 +249,14 @@ fn process_page_renders_top_processes_and_opens_task_manager() {
 }
 
 #[test]
+fn reduced_motion_snaps_island_hud_alpha() {
+    assert_eq!(crate::app::hud_alpha_step(0.0,1.0,0.016,false,true),1.0);
+    assert_eq!(crate::app::hud_alpha_step(1.0,0.0,0.016,false,false),0.0);
+    let animated=crate::app::hud_alpha_step(0.0,1.0,0.016,true,true);
+    assert!(animated>0.0 && animated<1.0,"开启动画时应逐步淡入：{animated}");
+}
+
+#[test]
 fn process_page_shows_an_animated_sampling_skeleton() {
     let _g=ENV_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut h=H::new();

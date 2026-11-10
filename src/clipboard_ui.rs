@@ -415,10 +415,7 @@ impl Popup {
                 self.shown = true;
             }
             let now = ctx.input(|input| input.time);
-            let shown_at = *self.shown_at.get_or_insert(now);
-            let progress = ((now - shown_at) / FADE_SECS).clamp(0.0, 1.0) as f32;
-            self.fade = if progress >= 1.0 { 1.0 } else { crate::anim::ease_out_cubic(progress) };
-            if progress < 1.0 {
+            if self.update_fade(now, crate::bar_layout::animations_enabled()) {
                 ctx.request_repaint();
             }
             if ctx.input(|input| input.viewport().close_requested()) {
@@ -437,6 +434,18 @@ impl Popup {
             self.error = None;
         }
         action
+    }
+
+    /// 更新入场淡入；关闭动效时直接显示完整面板。返回是否还需要继续刷新。
+    fn update_fade(&mut self, now: f64, motion: bool) -> bool {
+        if !motion {
+            self.fade = 1.0;
+            return false;
+        }
+        let shown_at = *self.shown_at.get_or_insert(now);
+        let progress = ((now - shown_at) / FADE_SECS).clamp(0.0, 1.0) as f32;
+        self.fade = if progress >= 1.0 { 1.0 } else { crate::anim::ease_out_cubic(progress) };
+        progress < 1.0
     }
 
     /// 面板本体。拆出来是为了让录制器与测试不必真的创建窗口也能渲染和交互。
@@ -1760,6 +1769,16 @@ pub fn relative_time(now: i64, at: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_motion_skips_panel_fade() {
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.shown_at = Some(0.0);
+        popup.fade = 0.0;
+        assert!(!popup.update_fade(0.01, false), "减少动画时不应继续刷新淡入");
+        assert_eq!(popup.fade, 1.0);
+    }
 
     fn item(id: &str, text: &str, at: i64) -> Item {
         Item { id: id.into(), text: text.into(), copied_at: at, pinned: false, image: None }

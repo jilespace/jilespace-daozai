@@ -12,7 +12,7 @@ pub const WIDTH: f32 = 392.0;
 pub const HEIGHT: f32 = 468.0;
 const PAD: f32 = 10.0;
 const INNER: f32 = 14.0;
-const FADE_SECS: f64 = 0.12;
+const FADE_SECS: f64 = 0.13;
 
 #[derive(Clone, Debug, Default)]
 pub enum Action {
@@ -136,10 +136,7 @@ impl Popup {
                 self.shown = true;
             }
             let now = ctx.input(|input| input.time);
-            let shown_at = *self.shown_at.get_or_insert(now);
-            let progress = ((now - shown_at) / FADE_SECS).clamp(0.0, 1.0) as f32;
-            self.fade = if progress >= 1.0 { 1.0 } else { crate::anim::ease_out_cubic(progress) };
-            if progress < 1.0 {
+            if self.update_fade(now, crate::bar_layout::animations_enabled()) {
                 ctx.request_repaint();
             }
             if ctx.input(|input| input.viewport().close_requested()) {
@@ -164,6 +161,18 @@ impl Popup {
             self.clear_confirm = false;
         }
         action
+    }
+
+    /// 更新入场淡入；关闭动效时直接显示完整面板。返回是否还需要继续刷新。
+    fn update_fade(&mut self, now: f64, motion: bool) -> bool {
+        if !motion {
+            self.fade = 1.0;
+            return false;
+        }
+        let shown_at = *self.shown_at.get_or_insert(now);
+        let progress = ((now - shown_at) / FADE_SECS).clamp(0.0, 1.0) as f32;
+        self.fade = if progress >= 1.0 { 1.0 } else { crate::anim::ease_out_cubic(progress) };
+        progress < 1.0
     }
 
     /// 面板本体：拆出来供测试与截图直接渲染。
@@ -436,6 +445,16 @@ impl Popup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_motion_skips_notification_fade() {
+        let mut popup = Popup::default();
+        popup.open(sample(), 0, String::new());
+        popup.shown_at = Some(0.0);
+        popup.fade = 0.0;
+        assert!(!popup.update_fade(0.01, false));
+        assert_eq!(popup.fade, 1.0);
+    }
     use eframe::egui::{Pos2, Rect};
 
     struct Rendered {
