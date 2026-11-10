@@ -105,6 +105,26 @@ impl Pin {
         }
     }
 
+    /// 恢复后把窗口夹回可见区域（换显示器/DPI 时避免贴图跑到屏幕外）。
+    pub fn clamp_visible(&mut self, pixels_per_point: f32) {
+        let Some(position) = self.position else { return };
+        let size = self.display_size();
+        #[cfg(windows)]
+        if let Some((x, y)) = crate::native::clamp_window_position(
+            position.x,
+            position.y,
+            size.x,
+            size.y,
+            pixels_per_point,
+        ) {
+            self.position = Some(egui::pos2(x, y));
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (position, size, pixels_per_point);
+        }
+    }
+
     pub fn metadata(&self) -> Option<crate::pin_store::StoredPin> {
         let position = self.position?;
         Some(crate::pin_store::StoredPin {

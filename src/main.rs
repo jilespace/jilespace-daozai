@@ -453,6 +453,11 @@ impl Shell {
                     self.app.notifications_unread(),
                 );
             }
+            daozai::notifications_ui::Action::OpenApp(source_id) => {
+                if !open_notification_source(&source_id) {
+                    self.app.say("无法打开通知来源应用");
+                }
+            }
             daozai::notifications_ui::Action::MuteApp(source_id, app) => {
                 if self.app.mute_notification_app(&source_id, &app) {
                     self.app.say(format!("已静音「{app}」的通知"));
@@ -764,14 +769,16 @@ impl Shell {
                 daozai::pin_store::remove_image(&root, &record.key);
                 continue;
             };
-            self.pins.push(daozai::pin::Pin::restore(
+            let mut pin = daozai::pin::Pin::restore(
                 image,
                 ppp,
                 egui::pos2(record.x, record.y),
                 record.zoom,
                 record.opacity,
                 record.key,
-            ));
+            );
+            pin.clamp_visible(ppp);
+            self.pins.push(pin);
         }
         if !self.pins.is_empty() {
             self.app.say(format!("已恢复 {} 张贴图", self.pins.len()));
@@ -1508,6 +1515,48 @@ fn cursor_logical(_ppp: f32) -> Option<(f32, f32)> {
 }
 
 #[cfg(windows)]
+fn open_notification_source(source_id: &str) -> bool {
+    let source_id = source_id.trim();
+    if source_id.is_empty() {
+        return false;
+    }
+    if source_id.contains('\\') || source_id.to_ascii_lowercase().ends_with(".exe") {
+        return open_path(std::path::Path::new(source_id)).is_ok();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let file: Vec<u16> = std::ffi::OsStr::new("explorer.exe")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let params: Vec<u16> = format!("shell:AppsFolder\\{source_id}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        unsafe {
+            ShellExecuteW(
+                None,
+                PCWSTR(operation.as_ptr()),
+                PCWSTR(file.as_ptr()),
+                PCWSTR(params.as_ptr()),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+            .0 as usize
+                > 32
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn open_path(p: &std::path::Path)->Result<(),String> {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;

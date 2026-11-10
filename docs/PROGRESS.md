@@ -2,6 +2,29 @@
 
 按阶段记录「已完成改动 / 新增功能 / 后续计划」。倒序排列，最新在上。
 
+## 2026-11-10 · Phase AN：贴图跨屏校正与通知打开应用
+
+**已完成改动**
+- 新增 `native::clamp_window_position`：按窗口中心选择显示器，把逻辑坐标夹进工作区
+  （窗口大于工作区时贴左上）；纯逻辑 `clamp_position_in_work_area` 带边界测试。
+- 贴图恢复时调用 `Pin::clamp_visible`，换显示器、DPI 或拔掉副屏后自动回到可见区域，
+  避免恢复到屏幕外。
+- 通知历史每条新增「打开」按钮：AUMID 通过 `explorer.exe shell:AppsFolder\<AUMID>`
+  启动，来源是 exe 路径时直接 ShellExecute；失败给出岛体提示。
+- 更新通知面板渲染断言与使用文档。
+
+**新增功能（用户可见）**
+- 贴图恢复不再跑到屏幕外；通知历史可一键打开来源应用。
+
+**验证**
+- `cargo test --locked --all-targets --features record -- --test-threads=1`：599 通过、40 忽略。
+- 新增测试：工作区夹取边界、通知面板「打开」入口；release 构建通过。
+- 限制：AUMID 打开依赖应用已注册 Shell；部分通知来源不提供 AUMID 时无「打开」按钮。
+
+**后续计划**
+- 输入法 HUD；按显示器记忆音量/亮度。
+- 性能：字体/纹理内存与冷启动；24 小时真实使用回归。
+
 ## 2026-11-10 · Phase AM：亮度 HUD
 
 **已完成改动**

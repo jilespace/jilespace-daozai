@@ -23,6 +23,8 @@ pub enum Action {
     Delete(String),
     /// 不再提醒该应用。
     MuteApp(String, String),
+    /// 打开通知来源应用（AUMID 或可执行文件路径）。
+    OpenApp(String),
     Clear,
 }
 
@@ -389,6 +391,19 @@ impl Popup {
                                     {
                                         *action = Action::MuteApp(item.source_id.clone(), item.app.clone());
                                     }
+                                    if !item.source_id.trim().is_empty()
+                                        && ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("打开").size(10.0).color(palette.accent),
+                                                )
+                                                .frame(false),
+                                            )
+                                            .on_hover_text("打开通知来源应用")
+                                            .clicked()
+                                    {
+                                        *action = Action::OpenApp(item.source_id.clone());
+                                    }
                                     if ui
                                         .add(
                                             egui::Button::new(RichText::new("复制").size(10.0).color(palette.accent))
@@ -492,7 +507,7 @@ mod tests {
         let mut popup = Popup::default();
         popup.open(sample(), 1, "正在监听 · 当前可见 2 条通知".into());
         let rendered = render(&mut popup, true);
-        for expected in ["通知", "1 条未读", "微信", "项目群里有人", "Outlook", "正在监听"] {
+        for expected in ["通知", "1 条未读", "微信", "项目群里有人", "Outlook", "正在监听", "打开"] {
             assert!(contains(&rendered.shapes, expected), "面板缺少 {expected}");
         }
         let mut popup = Popup::default();

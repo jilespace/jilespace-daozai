@@ -685,6 +685,31 @@ fn popup_position_in_work_area(cursor_px:(i32,i32),work_area_px:(i32,i32,i32,i32
     Some((desired_x.clamp(left,(right-width).max(left)),desired_y.clamp(top,(bottom-height).max(top))))
 }
 
+fn clamp_position_in_work_area(desired:(f32,f32),work:(f32,f32,f32,f32),size:(f32,f32))->(f32,f32) {
+    let(left,top,right,bottom)=work;
+    let x=desired.0.clamp(left,(right-size.0).max(left));
+    let y=desired.1.clamp(top,(bottom-size.1).max(top));
+    (x,y)
+}
+
+/// 把逻辑坐标的窗口位置夹到所在显示器工作区内（用于贴图恢复时跨屏/换 DPI）。
+pub fn clamp_window_position(x:f32,y:f32,width:f32,height:f32,pixels_per_point:f32)->Option<(f32,f32)> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW,MonitorFromPoint,MONITORINFO,MONITOR_DEFAULTTONEAREST};
+    if !x.is_finite()||!y.is_finite()||!width.is_finite()||!height.is_finite()||pixels_per_point<=0.0{return None;}
+    unsafe {
+        let center=POINT{x:((x+width/2.0)*pixels_per_point).round() as i32,y:((y+height/2.0)*pixels_per_point).round() as i32};
+        let monitor=MonitorFromPoint(center,MONITOR_DEFAULTTONEAREST);
+        if monitor.0.is_null(){return None;}
+        let mut info=MONITORINFO{cbSize:std::mem::size_of::<MONITORINFO>() as u32,..Default::default()};
+        if !GetMonitorInfoW(monitor,&mut info).as_bool(){return None;}
+        let area=info.rcWork;
+        let scale=pixels_per_point;
+        let work=(area.left as f32/scale,area.top as f32/scale,area.right as f32/scale,area.bottom as f32/scale);
+        Some(clamp_position_in_work_area((x,y),work,(width,height)))
+    }
+}
+
 pub fn clipboard_popup_position(width:f32,height:f32,pixels_per_point:f32)->Option<(f32,f32)> {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW,MonitorFromPoint,MONITORINFO,MONITOR_DEFAULTTONEAREST};
     unsafe {
@@ -984,6 +1009,16 @@ mod tests {
         }
         assert!(popup_position_in_work_area((0,0),(100,0,0,1040),420.0,500.0,1.0).is_none());
         assert!(popup_position_in_work_area((0,0),(0,40,1920,40),420.0,500.0,1.0).is_none());
+    }
+
+    #[test]
+    fn window_positions_are_clamped_into_the_work_area() {
+        let work = (0.0, 0.0, 1920.0, 1040.0);
+        assert_eq!(clamp_position_in_work_area((100.0, 120.0), work, (300.0, 200.0)), (100.0, 120.0));
+        assert_eq!(clamp_position_in_work_area((2000.0, 2000.0), work, (300.0, 200.0)), (1620.0, 840.0));
+        assert_eq!(clamp_position_in_work_area((-120.0, -80.0), work, (300.0, 200.0)), (0.0, 0.0));
+        // 窗口比工作区还大时贴住左上角，避免出现负坐标。
+        assert_eq!(clamp_position_in_work_area((50.0, 50.0), (0.0, 0.0, 200.0, 150.0), (400.0, 300.0)), (0.0, 0.0));
     }
 
     #[test]
