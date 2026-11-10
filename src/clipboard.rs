@@ -590,6 +590,19 @@ pub fn store_image(image: &crate::ocr::Image) -> Result<ImageRef, String> {
     Ok(ImageRef { key, width: image.width, height: image.height })
 }
 
+/// 生成用于列表的缩略图（等比缩放到 `max` 像素内）。
+pub fn thumbnail(image: &crate::ocr::Image, max: u32) -> crate::ocr::Image {
+    let Some(buffer) = image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone()) else {
+        return image.clone();
+    };
+    let thumb = image::DynamicImage::ImageRgba8(buffer).thumbnail(max, max).to_rgba8();
+    crate::ocr::Image {
+        width: thumb.width(),
+        height: thumb.height(),
+        rgba: thumb.into_raw(),
+    }
+}
+
 pub fn load_image(image: &ImageRef) -> Option<crate::ocr::Image> {
     let bytes = std::fs::read(image_path(&images_dir(), &image.key)).ok()?;
     let protected = bytes.strip_prefix(b"DPAPI")?;
@@ -1118,6 +1131,27 @@ mod tests {
         history.insert_image(ImageRef { key: "same".into(), width: 10, height: 10 }, 3);
         assert_eq!(history.items().iter().filter(|item| item.id == "same").count(), 1);
         assert_eq!(history.items()[0].id, "same");
+    }
+
+    #[test]
+    fn thumbnails_keep_aspect_ratio_and_fit_the_limit() {
+        let image = crate::ocr::Image {
+            width: 300,
+            height: 100,
+            rgba: vec![200; 300 * 100 * 4],
+        };
+        let thumb = thumbnail(&image, 72);
+        assert!(thumb.width <= 72 && thumb.height <= 72);
+        assert_eq!(thumb.width, 72);
+        assert_eq!(thumb.height, 24);
+        let tall = crate::ocr::Image {
+            width: 20,
+            height: 200,
+            rgba: vec![80; 20 * 200 * 4],
+        };
+        let thumb = thumbnail(&tall, 72);
+        assert_eq!(thumb.height, 72);
+        assert_eq!(thumb.width, 7);
     }
 
     #[cfg(windows)]

@@ -495,6 +495,19 @@ impl Shell {
                 self.close_clipboard(false);
                 self.start_region_ocr(ctx);
             }
+            daozai::clipboard_ui::Action::OcrImage(id) => {
+                self.close_clipboard(false);
+                let image = self
+                    .clipboard_items
+                    .iter()
+                    .find(|item| item.id == id)
+                    .and_then(|item| item.image.as_ref())
+                    .and_then(daozai::clipboard::load_image);
+                match image {
+                    Some(image) => self.start_ocr_image(ctx, image),
+                    None => self.app.say("图片已被清理，无法识别"),
+                }
+            }
             daozai::clipboard_ui::Action::OpenSettings => {
                 self.close_clipboard(false);
                 self.app.open_settings();
@@ -792,7 +805,7 @@ impl Shell {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.ocr_rx = Some(rx);
-        self.app.say("正在识别选区文字…");
+        self.app.say("正在识别图片文字…");
         ctx.request_repaint();
         std::thread::Builder::new()
             .name("daozai-ocr-region".into())

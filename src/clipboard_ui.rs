@@ -38,6 +38,8 @@ pub enum Action {
     Clear,
     OpenSettings,
     OcrClipboard,
+    /// 识别历史图片里的文字。
+    OcrImage(String),
     CropOcr,
     Close { restore: bool },
 }
@@ -85,6 +87,10 @@ pub struct Popup {
     preview_reset_scroll: bool,
     /// 预览图片的懒加载纹理（key 与 TextureHandle）。
     preview_texture: Option<(String, egui::TextureHandle)>,
+    /// 列表图片缩略图纹理。
+    thumbnails: std::collections::HashMap<String, egui::TextureHandle>,
+    thumb_rx: Option<std::sync::mpsc::Receiver<(String, egui::ColorImage)>>,
+    thumb_sig: Vec<(String, u32, u32)>,
     undo: Option<Undo>,
     confirm_clear: bool,
     error: Option<String>,
@@ -104,6 +110,9 @@ impl Default for Popup {
         Self {
             open: false,
             preview_texture: None,
+            thumbnails: std::collections::HashMap::new(),
+            thumb_rx: None,
+            thumb_sig: Vec::new(),
             query: String::new(),
             selected: 0,
             selected_id: None,
@@ -199,8 +208,80 @@ impl Popup {
             self.preview_open = false;
         }
         self.sync_selection();
+        self.refresh_thumbnails();
     }
 
+    /// 重新生成图片条目缩略图（后台线程解密/解码，不阻塞面板）。
+    fn refresh_thumbnails(&mut self) {
+        let keys: Vec<(String, crate::clipboard::ImageRef)> = self
+            .items
+            .iter()
+            .filter_map(|item| item.image.as_ref().map(|image| (item.id.clone(), image.clone())))
+            .take(crate::clipboard::MAX_IMAGE_ITEMS)
+            .collect();
+        let sig: Vec<(String, u32, u32)> = keys
+            .iter()
+            .map(|(key, image)| (key.clone(), image.width, image.height))
+            .collect();
+        if sig == self.thumb_sig {
+            return;
+        }
+        self.thumb_sig = sig;
+        self.thumbnails.clear();
+        if keys.is_empty() {
+            self.thumb_rx = None;
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.thumb_rx = Some(rx);
+        std::thread::Builder::new()
+            .name("daozai-clipboard-thumbs".into())
+            .spawn(move || {
+                for (key, image_ref) in keys {
+                    let Some(image) = crate::clipboard::load_image(&image_ref) else {
+                        continue;
+                    };
+                    let thumb = crate::clipboard::thumbnail(&image, 72);
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [thumb.width as usize, thumb.height as usize],
+                        &thumb.rgba,
+                    );
+                    if tx.send((key, color)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok();
+    }
+
+    /// 收取后台缩略图并上传纹理。
+    fn poll_thumbnails(&mut self, ctx: &egui::Context) {
+        let mut received = Vec::new();
+        let mut disconnected = false;
+        if let Some(rx) = self.thumb_rx.as_ref() {
+            loop {
+                match rx.try_recv() {
+                    Ok(item) => received.push(item),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for (key, pixels) in received {
+            let texture = ctx.load_texture(
+                format!("clipboard-thumb-{key}"),
+                pixels,
+                egui::TextureOptions::LINEAR,
+            );
+            self.thumbnails.insert(key, texture);
+        }
+        if disconnected {
+            self.thumb_rx = None;
+        }
+    }
     pub fn filtered(&self) -> Vec<usize> {
         let needle = self.query.trim().to_lowercase();
         self.items
@@ -359,6 +440,7 @@ impl Popup {
 
     /// 面板本体。拆出来是为了让录制器与测试不必真的创建窗口也能渲染和交互。
     pub fn panel_ui(&mut self, ctx: &egui::Context, dark: bool) -> Action {
+        self.poll_thumbnails(ctx);
         let palette = panel::apply_style(ctx, dark);
         let mut action = Action::None;
         let fade = self.fade.clamp(0.0, 1.0);
@@ -771,7 +853,8 @@ impl Popup {
                         }
                         let selected = self.selected_id.as_deref() == Some(item.id.as_str());
                         let scroll_into_view = selected && self.scroll_to_selected;
-                        let next = row(ui, &item, selected, p, &query, now, scroll_into_view);
+                        let thumbnail = self.thumbnails.get(&item.id).cloned();
+                        let next = row(ui, &item, thumbnail.as_ref(), selected, p, &query, now, scroll_into_view);
                         match next {
                             Some(RowAction::Select) => {
                                 self.selected_id = Some(item.id.clone());
@@ -794,6 +877,7 @@ impl Popup {
                             }
                             Some(RowAction::Pin) => action = Action::Pin(item.id.clone(), !item.pinned),
                             Some(RowAction::Delete) => action = self.stage_delete(&item),
+                            Some(RowAction::OcrImage) => action = Action::OcrImage(item.id.clone()),
                             None => {}
                         }
                     }
@@ -905,6 +989,7 @@ impl Popup {
     }
 
     fn preview_body(&mut self, ui: &mut Ui, rect: Rect, p: &Palette) -> Action {
+        let mut action = Action::None;
         let Some(item) = self.selected_item().cloned() else {
             self.preview_open = false;
             return Action::None;
@@ -934,6 +1019,21 @@ impl Popup {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if icon_button(ui, "×", p.muted, p.text, p.hover, 14.0) {
                                 self.preview_open = false;
+                            }
+                            if item.image.is_some()
+                                && ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new("识别文字")
+                                                .font(theme::font(10.5, W::Semibold))
+                                                .color(p.accent),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .on_hover_text("用 Windows 本地 OCR 识别这张图片")
+                                    .clicked()
+                            {
+                                action = Action::OcrImage(item.id.clone());
                             }
                         });
                     });
@@ -1026,7 +1126,7 @@ impl Popup {
                     }
                 });
         });
-        Action::None
+        action
     }
 
     fn footer(&mut self, ui: &mut Ui, rect: Rect, p: &Palette) -> Action {
@@ -1158,11 +1258,13 @@ enum RowAction {
     Delete,
     Pin,
     Preview,
+    OcrImage,
 }
 
 fn row(
     ui: &mut Ui,
     item: &Item,
+    thumbnail: Option<&egui::TextureHandle>,
     selected: bool,
     p: &Palette,
     query: &str,
@@ -1209,7 +1311,23 @@ fn row(
     );
     let tile = if selected { mix(p.raised, p.accent, 0.20) } else { p.raised };
     painter.rect_filled(icon_rect, 9.0, tile);
-    draw_kind_icon(&painter, icon_rect, kind, if selected { p.accent } else { p.faint });
+    if let Some(texture) = thumbnail {
+        let image_rect = icon_rect.shrink(4.0);
+        painter.image(
+            texture.id(),
+            image_rect,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        painter.rect_stroke(
+            image_rect,
+            6.0,
+            Stroke::new(1.0_f32, with_alpha(p.line, 0.9)),
+            StrokeKind::Inside,
+        );
+    } else {
+        draw_kind_icon(&painter, icon_rect, kind, if selected { p.accent } else { p.faint });
+    }
     let (line, range) = display_line(&item.text, query);
     let title_x = icon_rect.right() + 11.0;
     let chip_space = if item.pinned { 42.0 } else { 6.0 };
@@ -1264,6 +1382,10 @@ fn row(
         }
         if ui.button("预览").clicked() {
             out = Some(RowAction::Preview);
+            ui.close_menu();
+        }
+        if item.image.is_some() && ui.button("识别图片文字").clicked() {
+            out = Some(RowAction::OcrImage);
             ui.close_menu();
         }
         ui.separator();
@@ -1945,6 +2067,7 @@ mod tests {
         let preview = render_popup(&mut popup, true, "");
         assert!(contains_text(&preview.shapes, "预览"));
         assert!(contains_text(&preview.shapes, "图片读取失败"), "文件缺失时应给出预览兜底");
+        assert!(contains_text(&preview.shapes, "识别文字"), "图片预览应提供 OCR 入口");
     }
 
     /// 开发用：生成真实图片条目的预览截图。
@@ -1995,6 +2118,7 @@ mod tests {
             let mut list = Popup::default();
             list.open_state(true, false, None);
             list.set_items(vec![item]);
+            std::thread::sleep(std::time::Duration::from_millis(250));
             let list = render_popup(&mut list, true, "");
             write_png(&list, &dest.join("clipboard-image-list.png"));
         }
