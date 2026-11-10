@@ -113,13 +113,10 @@ pub(crate) fn apply_style(ctx: &egui::Context, dark: bool) -> Palette {
 }
 
 /// 面板外层的柔和投影。
-pub(crate) fn shadow(dark: bool) -> egui::epaint::Shadow {
-    egui::epaint::Shadow {
-        offset: [0, 14],
-        blur: 34,
-        spread: 0,
-        color: Color32::from_black_alpha(if dark { 135 } else { 42 }),
-    }
+pub(crate) fn shadow(_dark: bool) -> egui::epaint::Shadow {
+    // Glow 的子视口在 Windows 上无法正确合成 egui 阴影：阴影区会被画成不透明
+    // 黑色，表现为面板四周一圈黑边。改用描边+底色区分层级，避免遮挡桌面。
+    egui::epaint::Shadow::NONE
 }
 
 pub(crate) fn rgb(r: u8, g: u8, b: u8) -> Color32 {

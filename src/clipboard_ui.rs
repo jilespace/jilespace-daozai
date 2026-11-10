@@ -463,7 +463,7 @@ impl Popup {
                     .stroke(Stroke::new(1.0_f32, palette.line))
                     .corner_radius(18.0)
                     .inner_margin(INNER)
-                    .shadow(panel::shadow(dark))
+                    .shadow(egui::epaint::Shadow::NONE)
                     .show(ui, |ui| {
                         ui.set_min_size(ui.available_size());
                         action = self.panel_content(ui, &palette);
