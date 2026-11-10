@@ -2,6 +2,29 @@
 
 按阶段记录「已完成改动 / 新增功能 / 后续计划」。倒序排列，最新在上。
 
+## 2026-11-10 · Phase AM：亮度 HUD
+
+**已完成改动**
+- 新增 `src/brightness.rs`：用 `Get/SetMonitorBrightness`（dxva2）读写鼠标所在显示器的
+  亮度，支持 DDC/CI 外接屏与内置屏；不支持时返回 None，数值统一 0–100%。
+- 新增 `src/brightness_hud.rs`：底部居中 300×78 OSD，自绘太阳图标、亮度条与百分比；
+  不支持时显示「当前显示器不支持亮度调节」；1.4 秒自动消失、不抢焦点。
+- 全局热键 `Ctrl+Alt+Shift+↑/↓`（native 注册/消费/注销与测试），命令面板新增
+  「亮度 ±10%」，设置页快捷键列表同步。
+- 亮度实机探测（`DAOZAI_AUDIO_TESTS=1`）返回 Some(0.8)，本机 DDC/CI 可用。
+
+**新增功能（用户可见）**
+- 用快捷键调显示器亮度并在屏幕底部看到 OSD。
+
+**验证**
+- `cargo test --locked --all-targets --features record -- --test-threads=1`：598 通过、40 忽略。
+- 预览图 `preview/brightness/brightness-hud.png` 与不支持态截图；实机探测通过。
+- 限制：DDC/CI 慢屏调节可能有延迟；部分显示器/显卡组合不支持亮度控制。
+
+**后续计划**
+- 输入法 HUD；亮度/音量按显示器独立记忆。
+- 性能：字体/纹理内存与冷启动；24 小时真实使用回归。
+
 ## 2026-11-10 · Phase AL：媒体控制 HUD
 
 **已完成改动**

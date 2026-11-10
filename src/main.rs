@@ -84,6 +84,8 @@ struct Shell {
     volume_hud: daozai::volume_hud::Hud,
     /// 媒体控制 HUD（播放/切歌时短暂显示）。
     media_hud: daozai::media_hud::Hud,
+    /// 亮度 HUD。
+    brightness_hud: daozai::brightness_hud::Hud,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -201,6 +203,7 @@ impl Shell {
             pins_persist_last: remember_pins,
             volume_hud: Default::default(),
             media_hud: Default::default(),
+            brightness_hud: Default::default(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -617,6 +620,11 @@ impl Shell {
     fn finish_screenshot(&mut self, ctx: &egui::Context, image: daozai::ocr::Image) {
         self.annotate.open(ctx, image);
         ctx.request_repaint();
+    }
+
+    fn brightness_step(&mut self, delta: f32) {
+        let state = daozai::brightness::adjust(delta);
+        self.brightness_hud.show(state);
     }
 
     fn media_control(&mut self, transport: daozai::smtc::Transport, action: &'static str) {
@@ -1040,6 +1048,14 @@ impl Shell {
                 self.close_command_palette();
                 self.media_control(daozai::smtc::Transport::Prev, "上一首");
             }
+            PaletteAction::BrightnessUp => {
+                self.close_command_palette();
+                self.brightness_step(daozai::brightness::STEP);
+            }
+            PaletteAction::BrightnessDown => {
+                self.close_command_palette();
+                self.brightness_step(-daozai::brightness::STEP);
+            }
             PaletteAction::CopyClipboard(id) => {
                 self.close_command_palette();
                 self.clipboard.copy(&id);
@@ -1146,6 +1162,15 @@ impl eframe::App for Shell {
             let volume_up = daozai::native::take_volume_up_hotkey();
             let volume_down = daozai::native::take_volume_down_hotkey();
             let volume_mute = daozai::native::take_volume_mute_hotkey();
+            let brightness_up = daozai::native::take_brightness_up_hotkey();
+            let brightness_down = daozai::native::take_brightness_down_hotkey();
+            if brightness_up || brightness_down {
+                self.brightness_step(if brightness_up {
+                    daozai::brightness::STEP
+                } else {
+                    -daozai::brightness::STEP
+                });
+            }
             let media_play = daozai::native::take_media_play_hotkey();
             let media_next = daozai::native::take_media_next_hotkey();
             let media_prev = daozai::native::take_media_prev_hotkey();
@@ -1418,9 +1443,10 @@ impl eframe::App for Shell {
         self.volume_hud.poll(ctx);
         let media_state = self.media.lock().map(|media| media.clone()).unwrap_or_default();
         self.media_hud.poll(ctx, media_state);
+        self.brightness_hud.poll(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() || self.volume_hud.is_open() || self.media_hud.is_open() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() || self.volume_hud.is_open() || self.media_hud.is_open() || self.brightness_hud.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after

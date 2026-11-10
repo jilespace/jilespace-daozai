@@ -60,6 +60,8 @@ pub enum Action {
     MediaPlayPause,
     MediaNext,
     MediaPrev,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -517,6 +519,24 @@ impl Panel {
         } else {
             format!("{} · {}", snapshot.media_source.trim(), snapshot.media_title.trim())
         };
+        for (id, title, subtitle, keywords, palette_action) in [
+            (
+                "action-brightness-up",
+                "亮度 +10%",
+                "调高鼠标所在显示器的亮度",
+                "亮度 屏幕 brightness up 调高",
+                Action::BrightnessUp,
+            ),
+            (
+                "action-brightness-down",
+                "亮度 −10%",
+                "调低鼠标所在显示器的亮度",
+                "亮度 屏幕 brightness down 调低",
+                Action::BrightnessDown,
+            ),
+        ] {
+            entries.push(action(id, title, subtitle, keywords, Glyph::Gear, palette_action));
+        }
         entries.push(action(
             "action-media-play",
             if snapshot.media_playing { "暂停播放" } else { "继续播放" },

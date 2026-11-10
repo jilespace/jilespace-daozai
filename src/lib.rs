@@ -14,6 +14,8 @@ pub mod anim;
 pub mod annotate;
 pub mod app;
 pub mod audio;
+pub mod brightness;
+pub mod brightness_hud;
 pub mod bt;
 pub mod calendar;
 pub mod clipboard;

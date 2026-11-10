@@ -1408,6 +1408,8 @@ impl App {
                                 ("播放 / 暂停","控制当前系统媒体会话","Ctrl+Alt+Space"),
                                 ("下一首","切换到下一个媒体会话曲目","Ctrl+Alt+Shift+→"),
                                 ("上一首","切换到上一个媒体会话曲目","Ctrl+Alt+Shift+←"),
+                                ("亮度 +10%","调高鼠标所在显示器亮度","Ctrl+Alt+Shift+↑"),
+                                ("亮度 -10%","调低鼠标所在显示器亮度","Ctrl+Alt+Shift+↓"),
                             ] {
                                 ui.horizontal(|ui|{
                                     ui.vertical(|ui|{
