@@ -276,12 +276,20 @@ impl<'a> Card<'a> {
         let rect = self.rect(x, y, w, h).intersect(self.painter.clip_rect());
         let sense = if self.live { Sense::click() } else { Sense::hover() };
         let id = Id::new(("card", self.live, id));
-        self.ui.interact(rect, id, sense)
+        let response = self.ui.interact(rect, id, sense);
+        if self.live && response.hovered() {
+            self.ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        response
     }
 
     pub fn hit_drag(&self,x:f32,y:f32,w:f32,h:f32,id:impl std::hash::Hash)->Response {
         let rect=self.rect(x,y,w,h).intersect(self.painter.clip_rect());
-        self.ui.interact(rect,Id::new(("card-drag",self.live,id)),if self.live{Sense::click_and_drag()}else{Sense::hover()})
+        let response=self.ui.interact(rect,Id::new(("card-drag",self.live,id)),if self.live{Sense::click_and_drag()}else{Sense::hover()});
+        if self.live && response.hovered() {
+            self.ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        response
     }
     /// 悬停 / 按下的平滑过渡量（0..1）。
     pub fn hover_t(&self, r: &Response) -> (f32, f32) {

@@ -830,6 +830,9 @@ impl App {
         } else {
             "正在等待第一次 CPU 采样".into()
         });
+        if cpu_hit.hovered() {
+            c.stroke(44.0, 32.0, 156.0, 80.0, 10.0, 1.0, Color32::from_white_alpha(24));
+        }
         if cpu_hit.clicked() {
             self.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
         }
@@ -874,6 +877,9 @@ impl App {
             ),
             None => "正在读取内存信息".into(),
         });
+        if memory_hit.hovered() {
+            c.stroke(208.0, 32.0, 162.0, 32.0, 10.0, 1.0, Color32::from_white_alpha(24));
+        }
         if memory_hit.clicked() {
             self.pending.push(Cmd::Open(system_tool("taskmgr.exe")));
         }
@@ -907,6 +913,9 @@ impl App {
             ),
             None => "正在读取网络状态".into(),
         });
+        if network_hit.hovered() {
+            c.stroke(208.0, 70.0, 162.0, 42.0, 10.0, 1.0, Color32::from_white_alpha(24));
+        }
         if network_hit.clicked() {
             self.pending.push(Cmd::Open(std::path::PathBuf::from("ms-settings:network-status")));
         }
@@ -939,6 +948,9 @@ impl App {
             ),
             None => "正在读取磁盘信息".into(),
         });
+        if disk_hit.hovered() {
+            c.stroke(44.0, 114.0, 344.0, 16.0, 6.0, 1.0, Color32::from_white_alpha(24));
+        }
         if disk_hit.clicked() {
             self.pending.push(Cmd::Open(std::path::PathBuf::from("shell:MyComputerFolder")));
         }
@@ -1065,7 +1077,11 @@ impl App {
         if let Some(apparent) = w.apparent {
             refresh_hint.push_str(&format!("\n体感 {}°", apparent.round() as i32));
         }
-        if c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text(refresh_hint).clicked() {
+        let refresh = c.hit(44.0, 32.0, 158.0, 84.0, "weather-refresh").on_hover_text(refresh_hint);
+        if refresh.hovered() {
+            c.stroke(44.0, 32.0, 158.0, 84.0, 10.0, 1.0, Color32::from_white_alpha(28));
+        }
+        if refresh.clicked() {
             self.request_weather_refresh();
         }
         if let Some(next_city) = next_city {
@@ -1082,6 +1098,9 @@ impl App {
         if has_card {
             // 卡片整块的悬停提示先登记，模式切换按钮再盖在它上面，避免吞掉点击。
             let card = c.hit(208.0, 32.0, 167.0, 92.0, "weather-card");
+            if card.hovered() {
+                c.stroke(208.0, 32.0, 167.0, 92.0, 10.0, 1.0, Color32::from_white_alpha(24));
+            }
             match error {
                 Some(error) => {
                     card.on_hover_text(format!("更新失败：{error}\n当前显示上次成功获取的数据"));
@@ -1216,6 +1235,10 @@ impl App {
         let page_hit = c
             .hit(44.0, 32.0, 331.0, 92.0, "processes-open")
             .on_hover_text("点击打开任务管理器");
+        if page_hit.hovered() {
+            // 整页可点开任务管理器：悬停时给列表区域一层轻微高亮。
+            c.fill(44.0, 48.0, 331.0, 76.0, 10.0, Color32::from_white_alpha(7));
+        }
         let header = c
             .hit(44.0, 32.0, 148.0, 14.0, "processes-sort")
             .on_hover_text(format!("切换为按{}排序", sort.other().label()));
