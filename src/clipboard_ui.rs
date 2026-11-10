@@ -842,7 +842,8 @@ impl Popup {
                     let mut pinned_label = false;
                     let mut recent_label = false;
                     for index in indices {
-                        let item = self.items[index].clone();
+                        // 避免每帧克隆整条文本（单条可达 32 KB、200 条时非常可观）。
+                        let item = &self.items[index];
                         if item.pinned && !pinned_label {
                             section_label(ui, "置顶", p);
                             pinned_label = true;
@@ -854,30 +855,43 @@ impl Popup {
                         let selected = self.selected_id.as_deref() == Some(item.id.as_str());
                         let scroll_into_view = selected && self.scroll_to_selected;
                         let thumbnail = self.thumbnails.get(&item.id).cloned();
-                        let next = row(ui, &item, thumbnail.as_ref(), selected, p, &query, now, scroll_into_view);
+                        let next = row(ui, item, thumbnail.as_ref(), selected, p, &query, now, scroll_into_view);
                         match next {
                             Some(RowAction::Select) => {
-                                self.selected_id = Some(item.id.clone());
+                                let id = item.id.clone();
+                                self.selected_id = Some(id);
                                 self.sync_selection();
                                 self.preview_reset_scroll = true;
                             }
                             Some(RowAction::Paste) => {
-                                self.selected_id = Some(item.id.clone());
-                                action = Action::Paste(item.id.clone());
+                                let id = item.id.clone();
+                                self.selected_id = Some(id.clone());
+                                action = Action::Paste(id);
                             }
                             Some(RowAction::CopyOnly) => {
-                                self.selected_id = Some(item.id.clone());
-                                action = Action::CopyOnly(item.id.clone());
+                                let id = item.id.clone();
+                                self.selected_id = Some(id.clone());
+                                action = Action::CopyOnly(id);
                             }
                             Some(RowAction::Preview) => {
-                                self.selected_id = Some(item.id.clone());
+                                let id = item.id.clone();
+                                self.selected_id = Some(id);
                                 self.sync_selection();
                                 self.preview_open = true;
                                 self.preview_reset_scroll = true;
                             }
-                            Some(RowAction::Pin) => action = Action::Pin(item.id.clone(), !item.pinned),
-                            Some(RowAction::Delete) => action = self.stage_delete(&item),
-                            Some(RowAction::OcrImage) => action = Action::OcrImage(item.id.clone()),
+                            Some(RowAction::Pin) => {
+                                let id = item.id.clone();
+                                let pinned = item.pinned;
+                                action = Action::Pin(id, !pinned);
+                            }
+                            Some(RowAction::Delete) => {
+                                let copy = item.clone();
+                                action = self.stage_delete(&copy);
+                            }
+                            Some(RowAction::OcrImage) => {
+                                action = Action::OcrImage(item.id.clone());
+                            }
                             None => {}
                         }
                     }
@@ -1056,7 +1070,8 @@ impl Popup {
                         {
                             self.preview_texture = None;
                             if let Some(image) = crate::clipboard::load_image(image_ref) {
-                                let display = crate::annotate::display_image(&image);
+                                // 预览最大 1200px，既清晰又把纹理内存控制在小面板量级。
+                                let display = crate::clipboard::thumbnail(&image, 1200);
                                 let pixels = egui::ColorImage::from_rgba_unmultiplied(
                                     [display.width as usize, display.height as usize],
                                     &display.rgba,

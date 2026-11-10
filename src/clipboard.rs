@@ -7,6 +7,8 @@ pub const DEFAULT_DAYS: u32 = 7;
 pub const HOTKEY_TEXT: &str = "Ctrl+Alt+V";
 /// 图片历史最多保留的张数（置顶项不计入裁剪）。
 pub const MAX_IMAGE_ITEMS: usize = 24;
+/// 单张图片的像素上限：超过约 3200 万像素（如 8K）不再写入历史，避免解码/纹理内存失控。
+pub const MAX_IMAGE_PIXELS: u64 = 32_000_000;
 pub const IMAGE_DIR: &str = "clipboard-images";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -577,7 +579,16 @@ fn fnv1a(bytes: &[u8]) -> u32 {
 }
 
 /// 把图片编码为 PNG、用 DPAPI 加密后写入历史图片目录。
+pub fn image_dimensions_ok(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && (width as u64) * (height as u64) <= MAX_IMAGE_PIXELS
+}
+
 pub fn store_image(image: &crate::ocr::Image) -> Result<ImageRef, String> {
+    if !image_dimensions_ok(image.width, image.height) {
+        return Err("图片过大，已跳过历史记录（上限约 3200 万像素）".into());
+    }
     let png = crate::screenshot::encode_png(image)?;
     let key = format!("img-{:08x}-{}x{}", fnv1a(&png), image.width, image.height);
     let root = images_dir();
@@ -1131,6 +1142,14 @@ mod tests {
         history.insert_image(ImageRef { key: "same".into(), width: 10, height: 10 }, 3);
         assert_eq!(history.items().iter().filter(|item| item.id == "same").count(), 1);
         assert_eq!(history.items()[0].id, "same");
+    }
+
+    #[test]
+    fn oversized_images_are_rejected_before_encoding() {
+        assert!(image_dimensions_ok(3840, 2160));
+        assert!(image_dimensions_ok(7680, 4320) == false, "8K（约 3300 万像素）应超过上限");
+        assert!(!image_dimensions_ok(0, 100));
+        assert!(!image_dimensions_ok(100, 0));
     }
 
     #[test]
