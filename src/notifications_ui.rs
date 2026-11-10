@@ -351,7 +351,7 @@ impl Popup {
             return;
         }
         let height = (ui.available_height() - 58.0).max(60.0);
-        egui::ScrollArea::vertical()
+        let scroll = egui::ScrollArea::vertical()
             .id_salt("notification-history")
             .auto_shrink([false, false])
             .max_height(height)
@@ -438,6 +438,15 @@ impl Popup {
                     ui.add_space(5.0);
                 }
             });
+        if scroll.content_size.y > scroll.inner_rect.height() + 1.0 {
+            let area = scroll.inner_rect;
+            for step in 0..6 {
+                let k = step as f32 / 5.0;
+                let y = area.bottom() - 18.0 + step as f32 * 3.0;
+                let strip = egui::Rect::from_min_size(egui::pos2(area.left(), y), egui::vec2(area.width(), 3.0));
+                ui.painter().rect_filled(strip, 0.0, Color32::from_rgba_unmultiplied(palette.surface.r(), palette.surface.g(), palette.surface.b(), (16.0 + 26.0 * k) as u8));
+            }
+        }
     }
 }
 
@@ -565,9 +574,21 @@ mod tests {
     fn renders_at_reduced_window_size() {
         let mut popup = Popup::default();
         popup.open(sample(), 1, String::new());
-        let rendered = render_sized(&mut popup, true, Vec2::new(340.0, 300.0));
+        let size = Vec2::new(340.0, 300.0);
+        let rendered = render_sized(&mut popup, true, size);
         for expected in ["通知", "微信", "复制", "静音"] {
             assert!(contains(&rendered.shapes, expected), "小窗口缺少 {expected}");
+        }
+        if let Some(dest) = std::env::var_os("DAOZAI_NOTIFICATION_SMALL_PREVIEW").filter(|value| !value.is_empty()) {
+            let dest = std::path::PathBuf::from(dest);
+            std::fs::create_dir_all(&dest).unwrap();
+            let ppp=rendered.pixels_per_point;
+            let mut raster = crate::preview_raster::Raster::new((size.x*ppp) as usize, (size.y*ppp) as usize);
+            for delta in &rendered.textures { raster.update_textures(delta); }
+            raster.draw(&rendered.primitives, ppp);
+            let mut rgba = Vec::new();
+            raster.to_rgba8(&mut rgba);
+            image::save_buffer(dest.join("notifications-small.png"), &rgba, (size.x*ppp) as u32, (size.y*ppp) as u32, image::ColorType::Rgba8).unwrap();
         }
     }
 

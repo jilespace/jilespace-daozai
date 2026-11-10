@@ -521,7 +521,10 @@ impl Popup {
         );
         ui.add_space(7.0);
         let body_top = ui.cursor().top();
-        let footer_top = (bottom - FOOTER_H).max(body_top + 96.0);
+        // 高度不足时收窄底栏并隐藏第二行快捷键提示，优先保证列表与粘贴按钮可用。
+        let compact = (bottom - body_top) < 300.0;
+        let footer_height = if compact { 58.0 } else { FOOTER_H };
+        let footer_top = (bottom - footer_height).max(body_top + 64.0);
         let body = Rect::from_min_max(
             Pos2::new(left, body_top),
             Pos2::new(right, (footer_top - 8.0).max(body_top + 64.0)),
@@ -549,7 +552,7 @@ impl Popup {
             action = body_action;
         }
         let footer = Rect::from_min_max(Pos2::new(left, footer_top), Pos2::new(right, bottom));
-        let footer_action = self.footer(ui, footer, p);
+        let footer_action = self.footer(ui, footer, p, compact);
         if action == Action::None {
             action = footer_action;
         }
@@ -1154,7 +1157,7 @@ impl Popup {
         action
     }
 
-    fn footer(&mut self, ui: &mut Ui, rect: Rect, p: &Palette) -> Action {
+    fn footer(&mut self, ui: &mut Ui, rect: Rect, p: &Palette, compact: bool) -> Action {
         let mut action = Action::None;
         let mut cancel_clear = false;
         let mut confirm = false;
@@ -1204,6 +1207,7 @@ impl Popup {
                     keycap(ui, "Ctrl+Enter", p);
                 });
             });
+            if !compact {
             ui.add_space(9.0);
             ui.horizontal(|ui| {
                 if confirm_clear {
@@ -1255,6 +1259,7 @@ impl Popup {
                     });
                 }
             });
+            }
         });
         if confirm {
             self.confirm_clear = false;
@@ -2086,9 +2091,21 @@ mod tests {
         let mut popup = Popup::default();
         popup.open_state(true, false, None);
         popup.set_items(sample_items());
-        let rendered = render_popup_sized(&mut popup, true, "", Vec2::new(420.0, 340.0));
+        let size = Vec2::new(420.0, 340.0);
+        let rendered = render_popup_sized(&mut popup, true, "", size);
         for expected in ["剪贴板", "最近", "粘贴到", "粘贴", "仅复制"] {
             assert!(contains_text(&rendered.shapes, expected), "小窗口缺少 {expected}");
+        }
+        if let Some(dest) = std::env::var_os("DAOZAI_CLIPBOARD_SMALL_PREVIEW").filter(|value| !value.is_empty()) {
+            let dest = std::path::PathBuf::from(dest);
+            std::fs::create_dir_all(&dest).unwrap();
+            let ppp=rendered.pixels_per_point;
+            let mut raster = crate::preview_raster::Raster::new((size.x*ppp) as usize, (size.y*ppp) as usize);
+            for delta in &rendered.textures { raster.update_textures(delta); }
+            raster.draw(&rendered.primitives, ppp);
+            let mut rgba = Vec::new();
+            raster.to_rgba8(&mut rgba);
+            image::save_buffer(dest.join("clipboard-small.png"), &rgba, (size.x*ppp) as u32, (size.y*ppp) as u32, image::ColorType::Rgba8).unwrap();
         }
     }
 
