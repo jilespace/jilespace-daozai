@@ -32,7 +32,7 @@
 | 通知历史 | `Ctrl+Alt+N` 面板：通知镜像、搜索、未读筛选、复制/静音/删除/清空，本机持久化 | `notifications.rs`、`notifications_ui.rs`、`native.rs` |
 | 防睡眠 | 设置与命令面板一键阻止系统休眠/息屏 | `system.rs`、`model.rs` |
 | 滚动截图 | `Ctrl+Alt+Shift+L` 框选后自动/手动滚动，按重叠行拼接成长图（≤8000px、≤1600 万像素） | `scroll_capture.rs`、`region_capture.rs` |
-| 截图标注 | `Ctrl+Alt+Shift+S` 框选后进入编辑器；六种标注工具、撤销、复制/保存/贴图；贴图可选加密持久化 | `annotate.rs`、`screenshot.rs`、`capture_ui.rs` |
+| 截图标注 | `Ctrl+Alt+Shift+S` 框选后进入编辑器；七种标注工具（含序号）、撤销、复制/保存/贴图；贴图可选加密持久化 | `annotate.rs`、`screenshot.rs`、`capture_ui.rs` |
 | 图片取字 | `Ctrl+Alt+O` 识别剪贴板图片；`Ctrl+Alt+Shift+O` 框选屏幕取字，本地 OCR 并写入历史 | `ocr.rs`、`region_capture.rs`、`capture_ui.rs`、`main.rs` |
 | 系统提示 | 电源/电量、网络、音量、大写锁定、输入语言、蓝牙设备 | `system.rs`、`bt.rs`、`app.rs` |
 | 外观 | 设置页浅色/深色/跟随系统（岛体保持黑色）、页面显隐与排序、常驻组件排序 | `settings_theme.rs`、`extras.rs` |
@@ -175,6 +175,7 @@ Notchy（macOS 13+，闭源，一次性 $24.99，v2.0.6）把 macOS 刘海变成
 34. **Phase AH（已完成）剪贴板图片缩略图与 OCR**：后台缩略图缓存、预览/菜单 OCR 入口。
 35. **Phase AI（已完成）剪贴板图片边界与列表性能**：32M 像素上限、1200px 预览、免克隆列表。
 36. **Phase AJ（已完成）音量 HUD**：Core Audio 音量读写、全局快捷键、底部 OSD。
+37. **Phase AK（已完成）序号标注**：编号圆点工具、自动递增与导出合成。
 
 ## 五、UI 规范草案（新面板统一遵守）
 

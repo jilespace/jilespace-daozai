@@ -18,6 +18,7 @@ pub enum Tool {
     Text,
     Mosaic,
     Highlight,
+    Number,
 }
 
 impl Tool {
@@ -29,6 +30,7 @@ impl Tool {
             Self::Text => "文字",
             Self::Mosaic => "马赛克",
             Self::Highlight => "高亮",
+            Self::Number => "序号",
         }
     }
 }
@@ -133,6 +135,18 @@ pub fn rasterize(base: &Image, shapes: &[Shape]) -> Image {
                 if let (Some(start), Some(text)) = (shape.points.first(), shape.text.as_deref()) {
                     if let Some(glyphs) = text_bitmap(text, shape.width, shape.color) {
                         blend_bitmap(&mut out, *start, &glyphs);
+                    }
+                }
+            }
+            Tool::Number => {
+                if let Some(point) = shape.points.first() {
+                    let radius = number_radius(base.width);
+                    disk(&mut out, *point, radius, [255, 255, 255]);
+                    disk(&mut out, *point, (radius - 2.0).max(1.0), shape.color);
+                    if let Some(number) = shape.text.as_deref() {
+                        if let Some(glyphs) = text_bitmap(number, radius * 1.15, [255, 255, 255]) {
+                            blend_bitmap_centered(&mut out, *point, &glyphs);
+                        }
                     }
                 }
             }
@@ -319,6 +333,22 @@ fn text_bitmap(_text: &str, _font_px: f32, _color: [u8; 3]) -> Option<Image> {
     None
 }
 
+fn number_radius(base_width: u32) -> f32 {
+    (base_width as f32 * 0.014).clamp(14.0, 30.0)
+}
+
+fn next_number(shapes: &[Shape]) -> usize {
+    shapes.iter().filter(|shape| shape.tool == Tool::Number).count() + 1
+}
+
+fn blend_bitmap_centered(image: &mut Image, center: (f32, f32), bitmap: &Image) {
+    let origin = (
+        center.0 - bitmap.width as f32 / 2.0,
+        center.1 - bitmap.height as f32 / 2.0,
+    );
+    blend_bitmap(image, origin, bitmap);
+}
+
 fn ends(shape: &Shape) -> Option<((f32, f32), (f32, f32))> {
     let first = *shape.points.first()?;
     let last = *shape.points.last()?;
@@ -403,7 +433,7 @@ fn extend(shape: &mut Shape, point: (f32, f32)) {
                 shape.points[1] = point;
             }
         }
-        Tool::Text => {}
+        Tool::Text | Tool::Number => {}
     }
 }
 
@@ -655,7 +685,7 @@ impl Editor {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("截图标注").size(15.0).strong().color(palette.text));
             ui.add_space(6.0);
-            for tool in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text, Tool::Mosaic, Tool::Highlight] {
+            for tool in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text, Tool::Mosaic, Tool::Highlight, Tool::Number] {
                 let selected = self.tool == tool;
                 let response = ui.add(
                     egui::Button::new(
@@ -733,6 +763,22 @@ impl Editor {
                 ((point.y - canvas.top()) / self.scale).clamp(0.0, base.height.saturating_sub(1) as f32),
             )
         };
+        if self.tool == Tool::Number {
+            if response.clicked() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let position = to_image(pointer);
+                    let number = next_number(&self.shapes);
+                    self.shapes.push(Shape {
+                        tool: Tool::Number,
+                        color: COLORS[self.color],
+                        width: WIDTHS[self.width],
+                        points: vec![position],
+                        text: Some(number.to_string()),
+                    });
+                }
+            }
+            return;
+        }
         if self.tool == Tool::Text {
             if response.clicked() {
                 if let Some(pointer) = response.interact_pointer_pos() {
@@ -879,6 +925,28 @@ impl Editor {
                         0.0,
                         Color32::from_rgba_unmultiplied(shape.color[0], shape.color[1], shape.color[2], 92),
                     );
+                }
+            }
+            Tool::Number => {
+                if let Some(point) = shape.points.first() {
+                    let center = map(*point);
+                    let radius = number_radius(self.base.as_ref().map(|base| base.width).unwrap_or(1))
+                        * self.scale;
+                    ui.painter().circle_filled(center, radius, color);
+                    ui.painter().circle_stroke(
+                        center,
+                        radius - (1.0 * self.scale).max(0.8),
+                        Stroke::new((1.8 * self.scale).max(1.0), Color32::WHITE),
+                    );
+                    if let Some(number) = shape.text.as_deref() {
+                        ui.painter().text(
+                            center,
+                            egui::Align2::CENTER_CENTER,
+                            number,
+                            egui::FontId::proportional((radius * 1.15).max(9.0)),
+                            Color32::WHITE,
+                        );
+                    }
                 }
             }
             Tool::Mosaic => {
@@ -1073,6 +1141,39 @@ mod tests {
     }
 
     #[test]
+    fn numbered_callouts_increment_and_rasterize() {
+        assert_eq!(next_number(&[]), 1);
+        let base = gradient(300, 200);
+        let shapes = vec![
+            Shape {
+                tool: Tool::Number,
+                color: [255, 69, 58],
+                width: WIDTHS[1],
+                points: vec![(80.0, 80.0)],
+                text: Some("1".into()),
+            },
+            Shape {
+                tool: Tool::Number,
+                color: [10, 132, 255],
+                width: WIDTHS[1],
+                points: vec![(220.0, 140.0)],
+                text: Some("2".into()),
+            },
+        ];
+        assert_eq!(next_number(&shapes), 3);
+        let out = rasterize(&base, &shapes);
+        let radius = number_radius(300) as i32;
+        // 白环
+        let ring = pixel(&out, 80, (80 - radius + 1) as u32);
+        assert!(ring.iter().all(|channel| *channel > 180), "白环应清晰：{ring:?}");
+        // 圆内填色（避开中间数字）
+        let fill = pixel(&out, 74, 80);
+        assert!(fill[0] > 180 && fill[1] < 150, "应填充选中颜色：{fill:?}");
+        // 远离标注的区域保持原图
+        assert_eq!(pixel(&out, 20, 20), pixel(&base, 20, 20));
+    }
+
+    #[test]
     fn panel_renders_toolbar_and_preview() {
         let ctx = egui::Context::default();
         crate::theme::load_fonts(&ctx);
@@ -1114,6 +1215,15 @@ mod tests {
             points: vec![(60.0, 40.0), (240.0, 150.0)],
             text: None,
         });
+        for (index, position) in [(0, (360.0, 70.0)), (1, (360.0, 150.0))] {
+            editor.shapes.push(Shape {
+                tool: Tool::Number,
+                color: [10, 132, 255],
+                width: WIDTHS[1],
+                points: vec![position],
+                text: Some((index + 1).to_string()),
+            });
+        }
         let size = editor.window_size();
         let raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
@@ -1143,7 +1253,7 @@ mod tests {
         for clipped in &output.shapes {
             collect(&clipped.shape, &mut texts);
         }
-        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "马赛克", "高亮", "撤销", "复制", "贴图", "保存"] {
+        for expected in ["截图标注", "画笔", "矩形", "箭头", "文字", "马赛克", "高亮", "序号", "撤销", "复制", "贴图", "保存"] {
             assert!(texts.iter().any(|text| text.galley.text().contains(expected)), "编辑器缺少 {expected}");
         }
         if let Some(dest) = std::env::var_os("DAOZAI_ANNOTATE_PREVIEW_DIR").filter(|value| !value.is_empty()) {
