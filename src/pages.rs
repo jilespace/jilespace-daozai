@@ -1198,10 +1198,15 @@ impl App {
         let chevron = Color32::from_gray(165);
         c.seg((chevron_x, 39.5), (chevron_x + 2.5, 42.0), 1.0, chevron);
         c.seg((chevron_x + 2.5, 42.0), (chevron_x + 5.0, 39.5), 1.0, chevron);
+        let summary = if items.is_empty() {
+            "正在读取…".to_string()
+        } else {
+            format!("共 {total} 个 · {cores} 核 · 点击切换")
+        };
         c.text(
             375.0,
             42.0,
-            &format!("共 {total} 个 · {cores} 核 · 点击切换"),
+            &summary,
             8.5,
             W::Regular,
             Color32::from_gray(135),
@@ -1219,9 +1224,22 @@ impl App {
             self.process_sort = sort.other();
         }
         if items.is_empty() {
-            c.text(209.0, 72.0, "正在采集进程数据…", 11.0, W::Regular, theme::GRAY, H::Center);
-            for index in 0..3 {
-                c.fill(44.0, 54.0 + index as f32 * 13.0, 190.0, 6.0, 3.0, Color32::from_white_alpha(12));
+            // 加载骨架：轻微脉冲 + 缓慢旋转的弧线，让等待过程有生命感而不是静态占位。
+            let pulse = 0.5 + 0.5 * (self.t * 3.0).sin() as f32;
+            let spin = self.t as f32 * 4.2;
+            c.arc(145.0, 62.0, 6.0, spin, spin + 1.8, 1.6, Color32::from_gray(150));
+            c.text(156.0, 66.0, "正在采集进程数据…", 11.0, W::Regular, theme::GRAY, H::Left);
+            let widths = [190.0, 228.0, 168.0];
+            for (index, width) in widths.into_iter().enumerate() {
+                let alpha = (16.0 + 22.0 * pulse * (1.0 - index as f32 * 0.18)) as u8;
+                c.fill(
+                    44.0,
+                    84.0 + index as f32 * 12.0,
+                    width,
+                    5.0,
+                    2.5,
+                    Color32::from_white_alpha(alpha),
+                );
             }
             if !header_clicked && page_hit.clicked() {
                 open_task_manager(self);

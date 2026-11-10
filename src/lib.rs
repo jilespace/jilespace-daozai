@@ -59,7 +59,6 @@ pub mod pin;
 pub mod pin_store;
 mod updates;
 pub mod volume;
-pub mod volume_hud;
 pub mod weather;
 pub mod world_clock;
 

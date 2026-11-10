@@ -12,7 +12,7 @@ Windows 桌面伙伴 · 音乐与歌词 · 邮件验证码 · 日程提醒 · AI
 [![License](https://img.shields.io/badge/License-MIT-3cbf91)](LICENSE)
 [![CI](https://github.com/jilespace/jilespace-daozai/actions/workflows/ci.yml/badge.svg)](https://github.com/jilespace/jilespace-daozai/actions/workflows/ci.yml)
 
-[下载 Windows 版](https://github.com/jilespace/jilespace-daozai/releases/latest) · [使用指南](docs/USAGE.md) · [更新记录](CHANGELOG.md) · [路线图](docs/ROADMAP.md) · [反馈问题](https://github.com/jilespace/jilespace-daozai/issues)
+[下载 Windows 版](https://github.com/jilespace/jilespace-daozai/releases/latest) · [使用指南](docs/USAGE.md) · [UI 规范](docs/UI_GUIDELINES.md) · [更新记录](CHANGELOG.md) · [路线图](docs/ROADMAP.md) · [反馈问题](https://github.com/jilespace/jilespace-daozai/issues)
 
 </div>
 
@@ -44,7 +44,7 @@ Windows 桌面伙伴 · 音乐与歌词 · 邮件验证码 · 日程提醒 · AI
 | 岛体外观 | 不透明度、圆角与动效强度，设置页实时预览 |
 | 亮度 HUD | `Ctrl+Alt+Shift+↑/↓` 调节鼠标所在显示器亮度；底部 OSD 显示百分比与不支持提示 |
 | 媒体 HUD | `Ctrl+Alt+Space` 播放/暂停、`Ctrl+Alt+Shift+←/→` 切歌；底部显示曲目与来源 OSD |
-| 音量 HUD | `Ctrl+Alt+↑/↓` 调节音量、`Ctrl+Alt+M` 静音；屏幕底部居中显示 OSD |
+| 音量 HUD | `Ctrl+Alt+↑/↓` 调节音量、`Ctrl+Alt+M` 静音；岛体顶部系统 HUD（音量条可拖动） |
 | 设置搜索 | 设置侧栏按名称或关键词搜索，自动跳到匹配标签 |
 | 防睡眠 | 一键保持系统与屏幕唤醒，适合演示、下载和长时间任务 |
 | 进程排行 | 前 8 个进程，表头切换 CPU/内存排序，2 秒刷新，点击打开任务管理器 |

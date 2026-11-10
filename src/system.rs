@@ -6,7 +6,6 @@ use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{eConsole, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
@@ -77,11 +76,8 @@ impl Snapshot {
                 windows::Win32::System::Com::CoTaskMemFree(Some(id.0 as _));
                 text
             });
-            let volume = device.and_then(|d|d.Activate::<IAudioEndpointVolume>(CLSCTX_ALL,None).ok()).and_then(|a| {
-                Some((
-                    (a.GetMasterVolumeLevelScalar().ok()? * 100.0).round() as u32,
-                    a.GetMute().ok()?.as_bool(),
-                ))
+            let volume = crate::volume::read().map(|state| {
+                ((state.level * 100.0).round() as u32, state.muted)
             });
             let profile=windows::Networking::Connectivity::NetworkInformation::GetInternetConnectionProfile().ok();
             let network=profile.as_ref().and_then(|p|p.GetNetworkConnectivityLevel().ok()).is_some_and(|v|v==windows::Networking::Connectivity::NetworkConnectivityLevel::InternetAccess);
@@ -133,14 +129,12 @@ unsafe fn audio_device() -> Result<IMMDevice> {    thread_local! {static INITIAL
     let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
     en.GetDefaultAudioEndpoint(eRender, eConsole)
 }
-unsafe fn audio() -> Result<IAudioEndpointVolume> {audio_device()?.Activate(CLSCTX_ALL,None)}
 /// 设置主音量（0..100）；同时解除静音，拖动音量条时立刻能听到。
 #[cfg(windows)]
 pub fn set_volume(percent: u32) {
-    unsafe {
-        if let Ok(a) = audio() {
-            let _ = a.SetMasterVolumeLevelScalar((percent.min(100) as f32) / 100.0, std::ptr::null());
-            let _ = a.SetMute(false, std::ptr::null());
+    if let Some(state) = crate::volume::set_level(percent.min(100) as f32 / 100.0) {
+        if state.muted {
+            let _ = crate::volume::toggle_mute();
         }
     }
 }
@@ -148,12 +142,7 @@ pub fn set_volume(percent: u32) {
 /// 切换静音，返回切换后的静音状态（拿不到设备时返回 None）。
 #[cfg(windows)]
 pub fn toggle_mute() -> Option<bool> {
-    unsafe {
-        let a = audio().ok()?;
-        let muted = a.GetMute().ok()?.as_bool();
-        a.SetMute(!muted, std::ptr::null()).ok()?;
-        Some(!muted)
-    }
+    crate::volume::toggle_mute().map(|state| state.muted)
 }
 
 pub fn idle_seconds() -> f64 {

@@ -1547,6 +1547,11 @@ impl App {
         self.pomo.running = !self.pomo.running;
         self.show_page(1);
     }
+    /// 外部（音量快捷键）更新岛体音量 HUD 的数值。
+    pub fn show_volume_ui(&mut self, level: u32, muted: bool) {
+        self.volume_ui = Some((level.min(100), muted));
+    }
+
     /// 设置搜索：返回匹配的标签，并在当前标签不匹配时跳到第一个结果。
     pub fn apply_settings_query(&mut self) -> Vec<usize> {
         let matched = crate::extras::settings_matches(&self.settings_query);

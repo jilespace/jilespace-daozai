@@ -80,8 +80,6 @@ struct Shell {
     pins: Vec<daozai::pin::Pin>,
     pins_restored: bool,
     pins_persist_last: bool,
-    /// 音量 HUD（调整音量/静音时短暂显示）。
-    volume_hud: daozai::volume_hud::Hud,
     /// 媒体控制 HUD（播放/切歌时短暂显示）。
     media_hud: daozai::media_hud::Hud,
     /// 亮度 HUD。
@@ -201,7 +199,6 @@ impl Shell {
             pins: Vec::new(),
             pins_restored: false,
             pins_persist_last: remember_pins,
-            volume_hud: Default::default(),
             media_hud: Default::default(),
             brightness_hud: Default::default(),
             notifications_popup: Default::default(),
@@ -644,15 +641,30 @@ impl Shell {
 
     fn volume_step(&mut self, delta: f32) {
         match daozai::volume::adjust(delta) {
-            Some(state) => self.volume_hud.show(state),
+            Some(state) => self.show_volume_hud(state.level, state.muted),
             None => self.app.say("无法读取系统音量"),
         }
     }
 
     fn volume_toggle_mute(&mut self) {
         match daozai::volume::toggle_mute() {
-            Some(state) => self.volume_hud.show(state),
+            Some(state) => self.show_volume_hud(state.level, state.muted),
             None => self.app.say("无法读取系统音量"),
+        }
+    }
+
+    /// 音量变化统一交给岛体顶部的系统 HUD（与硬件音量键一致，可拖动调节）。
+    fn show_volume_hud(&mut self, level: f32, muted: bool) {
+        let percent = (level * 100.0).round() as u32;
+        self.app.show_volume_ui(percent, muted);
+        self.volume_quiet = PollClock::now();
+        if self.app.settings.system_hud {
+            self.app.alert(
+                "系统音量",
+                if muted { "已静音".to_string() } else { format!("音量 {percent}%") },
+                5,
+                false,
+            );
         }
     }
 
@@ -1447,13 +1459,12 @@ impl eframe::App for Shell {
         self.show_scroll_capture(ctx);
         self.show_annotate(ctx);
         self.show_pins(ctx);
-        self.volume_hud.poll(ctx);
         let media_state = self.media.lock().map(|media| media.clone()).unwrap_or_default();
         self.media_hud.poll(ctx, media_state);
         self.brightness_hud.poll(ctx);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() || self.volume_hud.is_open() || self.media_hud.is_open() || self.brightness_hud.is_open() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some()  || self.media_hud.is_open() || self.brightness_hud.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after
