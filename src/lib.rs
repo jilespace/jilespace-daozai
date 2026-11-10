@@ -28,6 +28,7 @@ pub mod icons;
 pub mod input;
 pub mod lyrics;
 pub mod mail;
+pub mod media_hud;
 mod mail_reader;
 mod task_picker;
 pub mod model;

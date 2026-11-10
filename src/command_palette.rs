@@ -57,6 +57,9 @@ pub enum Action {
     VolumeUp,
     VolumeDown,
     VolumeMute,
+    MediaPlayPause,
+    MediaNext,
+    MediaPrev,
 }
 
 /// 打开面板时由岛体提供的上下文。
@@ -72,6 +75,9 @@ pub struct Snapshot {
     pub weather_enabled: bool,
     /// 当前桌面贴图数量，用于「关闭所有贴图」。
     pub pins: usize,
+    pub media_title: String,
+    pub media_source: String,
+    pub media_playing: bool,
 }
 
 #[derive(Clone)]
@@ -504,6 +510,37 @@ impl Panel {
         ] {
             entries.push(action(id, title, subtitle, keywords, Glyph::Gear, palette_action));
         }
+        let media_label = if snapshot.media_title.trim().is_empty() {
+            "没有正在播放的媒体".to_string()
+        } else if snapshot.media_source.trim().is_empty() {
+            snapshot.media_title.clone()
+        } else {
+            format!("{} · {}", snapshot.media_source.trim(), snapshot.media_title.trim())
+        };
+        entries.push(action(
+            "action-media-play",
+            if snapshot.media_playing { "暂停播放" } else { "继续播放" },
+            &media_label,
+            "播放 暂停 继续 媒体 media play pause",
+            Glyph::Gear,
+            Action::MediaPlayPause,
+        ));
+        entries.push(action(
+            "action-media-next",
+            "下一首",
+            &media_label,
+            "下一首 切歌 媒体 media next",
+            Glyph::Gear,
+            Action::MediaNext,
+        ));
+        entries.push(action(
+            "action-media-prev",
+            "上一首",
+            &media_label,
+            "上一首 切歌 媒体 media previous",
+            Glyph::Gear,
+            Action::MediaPrev,
+        ));
         if snapshot.pins > 0 {
             entries.push(action(
                 "action-close-pins",
@@ -1910,6 +1947,9 @@ mod tests {
             stay_awake: false,
             weather_enabled: false,
             pins: 0,
+            media_title: "夜色温柔".into(),
+            media_source: "Spotify".into(),
+            media_playing: true,
         }
     }
 
@@ -2113,6 +2153,19 @@ mod tests {
         assert_eq!(recent.items.iter().filter(|(_, path)| path.ends_with("A5.exe")).count(), 1);
         assert!(recent.items.len() <= 12);
         assert!(recent.items().len() <= 5);
+    }
+
+    #[test]
+    fn media_actions_show_the_current_track() {
+        let palette = palette_for_snapshot(snapshot(), "");
+        let play = palette
+            .results
+            .iter()
+            .find(|entry| entry.action == Action::MediaPlayPause)
+            .expect("空查询应包含播放/暂停");
+        assert!(play.subtitle.contains("Spotify") && play.subtitle.contains("夜色温柔"));
+        assert!(palette.results.iter().any(|entry| entry.action == Action::MediaNext));
+        assert!(palette.results.iter().any(|entry| entry.action == Action::MediaPrev));
     }
 
     #[test]

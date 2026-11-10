@@ -82,6 +82,8 @@ struct Shell {
     pins_persist_last: bool,
     /// 音量 HUD（调整音量/静音时短暂显示）。
     volume_hud: daozai::volume_hud::Hud,
+    /// 媒体控制 HUD（播放/切歌时短暂显示）。
+    media_hud: daozai::media_hud::Hud,
     /// 通知历史面板与数据版本。
     notifications_popup: daozai::notifications_ui::Popup,
     notifications_rev: u64,
@@ -198,6 +200,7 @@ impl Shell {
             pins_restored: false,
             pins_persist_last: remember_pins,
             volume_hud: Default::default(),
+            media_hud: Default::default(),
             notifications_popup: Default::default(),
             notifications_rev: 0,
             capture_image: None,
@@ -616,6 +619,16 @@ impl Shell {
         ctx.request_repaint();
     }
 
+    fn media_control(&mut self, transport: daozai::smtc::Transport, action: &'static str) {
+        let state = self.media.lock().map(|media| media.clone()).unwrap_or_default();
+        let mut shown = state.clone();
+        if matches!(transport, daozai::smtc::Transport::Toggle) {
+            shown.playing = !shown.playing;
+        }
+        daozai::smtc::control(transport, &state.source);
+        self.media_hud.show(shown, action);
+    }
+
     fn volume_step(&mut self, delta: f32) {
         match daozai::volume::adjust(delta) {
             Some(state) => self.volume_hud.show(state),
@@ -1015,6 +1028,18 @@ impl Shell {
                 self.close_command_palette();
                 self.volume_toggle_mute();
             }
+            PaletteAction::MediaPlayPause => {
+                self.close_command_palette();
+                self.media_control(daozai::smtc::Transport::Toggle, "播放 / 暂停");
+            }
+            PaletteAction::MediaNext => {
+                self.close_command_palette();
+                self.media_control(daozai::smtc::Transport::Next, "下一首");
+            }
+            PaletteAction::MediaPrev => {
+                self.close_command_palette();
+                self.media_control(daozai::smtc::Transport::Prev, "上一首");
+            }
             PaletteAction::CopyClipboard(id) => {
                 self.close_command_palette();
                 self.clipboard.copy(&id);
@@ -1121,6 +1146,18 @@ impl eframe::App for Shell {
             let volume_up = daozai::native::take_volume_up_hotkey();
             let volume_down = daozai::native::take_volume_down_hotkey();
             let volume_mute = daozai::native::take_volume_mute_hotkey();
+            let media_play = daozai::native::take_media_play_hotkey();
+            let media_next = daozai::native::take_media_next_hotkey();
+            let media_prev = daozai::native::take_media_prev_hotkey();
+            if media_play || media_next || media_prev {
+                if media_play {
+                    self.media_control(daozai::smtc::Transport::Toggle, "播放 / 暂停");
+                } else if media_next {
+                    self.media_control(daozai::smtc::Transport::Next, "下一首");
+                } else {
+                    self.media_control(daozai::smtc::Transport::Prev, "上一首");
+                }
+            }
             if volume_up || volume_down || volume_mute {
                 if volume_up {
                     self.volume_step(daozai::volume::STEP);
@@ -1379,9 +1416,11 @@ impl eframe::App for Shell {
         self.show_annotate(ctx);
         self.show_pins(ctx);
         self.volume_hud.poll(ctx);
+        let media_state = self.media.lock().map(|media| media.clone()).unwrap_or_default();
+        self.media_hud.poll(ctx, media_state);
         #[cfg(windows)] let repaint_after=if self.hidden{Duration::from_secs(1)}else{out.repaint_after};
         #[cfg(not(windows))] let repaint_after=out.repaint_after;
-        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() || self.volume_hud.is_open() {
+        let repaint_after = if self.clipboard_popup.open || self.command_palette.is_open() || self.capture_overlay.open || self.notifications_popup.is_open() || self.annotate.is_open() || !self.pins.is_empty() || self.scroll_capture.is_some() || self.volume_hud.is_open() || self.media_hud.is_open() {
             Duration::from_millis(16)
         } else {
             repaint_after

@@ -1260,6 +1260,9 @@ impl App {
             stay_awake: self.settings.stay_awake,
             weather_enabled: self.settings.weather_enabled,
             pins: 0,
+            media_title: self.media.title.clone(),
+            media_source: self.media.source.clone(),
+            media_playing: self.media.playing,
         }
     }
 

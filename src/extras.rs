@@ -1405,6 +1405,9 @@ impl App {
                                 ("音量 +5%","调高系统默认输出音量","Ctrl+Alt+↑"),
                                 ("音量 -5%","调低系统默认输出音量","Ctrl+Alt+↓"),
                                 ("静音","切换默认输出设备静音","Ctrl+Alt+M"),
+                                ("播放 / 暂停","控制当前系统媒体会话","Ctrl+Alt+Space"),
+                                ("下一首","切换到下一个媒体会话曲目","Ctrl+Alt+Shift+→"),
+                                ("上一首","切换到上一个媒体会话曲目","Ctrl+Alt+Shift+←"),
                             ] {
                                 ui.horizontal(|ui|{
                                     ui.vertical(|ui|{
