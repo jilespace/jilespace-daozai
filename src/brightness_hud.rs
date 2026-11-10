@@ -73,9 +73,17 @@ impl Hud {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 self.shown = true;
             }
+            let fade = if crate::bar_layout::animations_enabled() {
+                crate::anim::entrance_opacity(self.shown_at.elapsed())
+            } else {
+                1.0
+            };
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(Color32::TRANSPARENT).inner_margin(6.0))
-                .show(ctx, |ui| self.panel_ui(ui));
+                .show(ctx, |ui| {
+                    ui.set_opacity(fade);
+                    self.panel_ui(ui);
+                });
         });
     }
 

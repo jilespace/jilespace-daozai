@@ -150,3 +150,23 @@ mod tests {
         assert!((a.pos - b.pos).abs() < 0.01);
     }
 }
+/// 浮层 / HUD 入场透明度：130ms 缓出；用于底部 OSD 的淡入。
+pub fn entrance_opacity(elapsed: std::time::Duration) -> f32 {
+    const SECS: f32 = 0.13;
+    let t = (elapsed.as_secs_f32() / SECS).clamp(0.0, 1.0);
+    ease_out_cubic(t)
+}
+#[cfg(test)]
+mod entrance_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn entrance_opacity_eases_in_and_saturates() {
+        assert_eq!(entrance_opacity(Duration::ZERO), 0.0);
+        let mid = entrance_opacity(Duration::from_millis(65));
+        assert!(mid > 0.3 && mid < 0.9, "中段应处于淡入过程中：{mid}");
+        assert_eq!(entrance_opacity(Duration::from_millis(130)), 1.0);
+        assert_eq!(entrance_opacity(Duration::from_secs(2)), 1.0);
+    }
+}

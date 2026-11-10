@@ -1024,6 +1024,8 @@ impl Popup {
         let kind = if item.is_image() { ItemKind::Image } else { item_kind(&item.text) };
         ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
             ui.set_width(rect.width());
+            // 预览内容必须裁在正文区域内，避免小窗口下压到底栏上。
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             egui::Frame::new()
                 .fill(p.raised)
                 .stroke(Stroke::new(1.0_f32, p.line_soft))
@@ -2106,6 +2108,31 @@ mod tests {
             let mut rgba = Vec::new();
             raster.to_rgba8(&mut rgba);
             image::save_buffer(dest.join("clipboard-small.png"), &rgba, (size.x*ppp) as u32, (size.y*ppp) as u32, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
+    #[test]
+    fn preview_renders_at_reduced_window_size() {
+        let mut popup = Popup::default();
+        popup.open_state(true, false, None);
+        popup.set_items(sample_items());
+        popup.selected_id = Some("b".into());
+        popup.sync_selection();
+        popup.preview_open = true;
+        let size = Vec2::new(420.0, 340.0);
+        let rendered = render_popup_sized(&mut popup, true, "", size);
+        assert!(contains_text(&rendered.shapes, "预览"));
+        assert!(contains_text(&rendered.shapes, "第三行留给备注") || contains_text(&rendered.shapes, "第二行是补充说明"));
+        if let Some(dest) = std::env::var_os("DAOZAI_CLIPBOARD_SMALL_PREVIEW").filter(|value| !value.is_empty()) {
+            let dest = std::path::PathBuf::from(dest);
+            std::fs::create_dir_all(&dest).unwrap();
+            let ppp=rendered.pixels_per_point;
+            let mut raster = crate::preview_raster::Raster::new((size.x*ppp) as usize, (size.y*ppp) as usize);
+            for delta in &rendered.textures { raster.update_textures(delta); }
+            raster.draw(&rendered.primitives, ppp);
+            let mut rgba = Vec::new();
+            raster.to_rgba8(&mut rgba);
+            image::save_buffer(dest.join("clipboard-preview-small.png"), &rgba, (size.x*ppp) as u32, (size.y*ppp) as u32, image::ColorType::Rgba8).unwrap();
         }
     }
 
